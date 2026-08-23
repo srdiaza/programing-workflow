@@ -33,11 +33,13 @@ It asks which model should be used for:
 - security and reliability;
 - the reviewer.
 
+For each assignment it also asks for the model's thinking level. OpenCode exposes the levels supported by that specific model, so the workflow does not pretend that every provider uses the same scale.
+
 It also asks whether consultation and review are required or optional. These choices apply only to the `workflow-*` agents. Your normal OpenCode configuration and default agent are left unchanged.
 
 You can run `workflow-ai configure` again whenever you want to change the model assigned to an area.
 
-The model step is a numbered selector populated from the models available to your OpenCode installation. Press Enter to keep the current choice, choose a number to assign another model, or use the manual option only for a model that is not listed. Each assignment shows what that role does before you choose its model.
+The model step is a search-based picker populated from the models available to your OpenCode installation. Type part of a provider or model name, such as `luna`, `deepseek`, `kimi`, or `minimax`; refine the text if several matches remain. Press Enter to keep the current choice, or type `manual` only for a model that is not listed. After selecting a model, choose its supported thinking level by name (`default`, `medium`, `high`, `max`, or another level declared by that provider). If the provider does not publish its variants, the workflow lets you enter the provider's variant name manually instead of hiding the setting. Each assignment explains the responsibility of the role before you choose its model and thinking level.
 
 ### 3. Open a project and select the Lead
 
@@ -161,6 +163,8 @@ The workflow-only settings live at:
 ```
 
 This file contains the Lead model, area model map, reviewer model, consultation/review policies, and Engram endpoint. It is synchronized only into `workflow-*` agents.
+
+The thinking choices are stored beside those model assignments as `lead_variant`, `area_variants`, and `reviewer_variant`. A `default` value leaves the model's native OpenCode behavior unchanged; a named value is written as that agent's OpenCode `variant`.
 
 ## Project setup and recovery
 

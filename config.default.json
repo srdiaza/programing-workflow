@@ -1,6 +1,7 @@
 {
   "schema": "continuous-workflow/config/v1",
   "lead_model": "openai/gpt-5.6-luna",
+  "lead_variant": "default",
   "areas": {
     "discovery": "openai/gpt-5.6-luna",
     "architecture": "minimax/MiniMax-M3",
@@ -9,7 +10,16 @@
     "security": "opencode-go/kimi-k2.7-code",
     "reliability": "minimax/MiniMax-M3"
   },
+  "area_variants": {
+    "discovery": "default",
+    "architecture": "default",
+    "frontend": "default",
+    "backend": "default",
+    "security": "default",
+    "reliability": "default"
+  },
   "reviewer_model": "minimax/MiniMax-M3",
+  "reviewer_variant": "default",
   "review_policy": "required",
   "consultation_policy": "on-demand",
   "engram_url": "http://127.0.0.1:7437"
