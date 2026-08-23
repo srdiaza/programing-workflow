@@ -1,0 +1,16 @@
+{
+  "schema": "continuous-workflow/config/v1",
+  "lead_model": "openai/gpt-5.6-luna",
+  "areas": {
+    "discovery": "openai/gpt-5.6-luna",
+    "architecture": "minimax/MiniMax-M3",
+    "frontend": "opencode-go/kimi-k2.7-code",
+    "backend": "openai/gpt-5.6-luna",
+    "security": "opencode-go/kimi-k2.7-code",
+    "reliability": "minimax/MiniMax-M3"
+  },
+  "reviewer_model": "minimax/MiniMax-M3",
+  "review_policy": "required",
+  "consultation_policy": "on-demand",
+  "engram_url": "http://127.0.0.1:7437"
+}

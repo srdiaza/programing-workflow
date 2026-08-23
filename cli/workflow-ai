@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec bun "${CONTINUOUS_WORKFLOW_CLI:-$HOME/.config/opencode/continuous-workflow/workflow-ai.ts}" "$@"
