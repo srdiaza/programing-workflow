@@ -31,9 +31,12 @@ workflow-ai start --dir /path/to/project
 workflow-ai run --dir /path/to/project "implement feature X"
 workflow-ai status feature-x
 workflow-ai resume feature-x
+workflow-ai complete feature-x
 ```
 
 The workflow is explicitly selected. Starting OpenCode normally does not select it.
+
+The Lead does not close a change automatically. After implementation, tests, and review pass, it moves the change to `ready` and asks for confirmation. Continue making adjustments in the same change while it is ready; use `workflow-ai complete feature-x` (or the `/work-complete feature-x` command) only when you explicitly want to close it.
 
 ## Required toolchain
 

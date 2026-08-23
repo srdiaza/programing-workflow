@@ -65,4 +65,6 @@ After a restart or compaction, run `workflow_state` with `operation: "status"` b
 
 ## Completion
 
-Do not mark a change complete until acceptance criteria, tests, and reviewer findings are addressed. Finish with `operation: "complete"`, a concise summary, and `next_action: "No further action"`.
+Do not mark a change complete merely because acceptance criteria, tests, and reviewer findings are addressed. First report that the change is ready, call `workflow_state` with `operation: "ready"`, and wait for an explicit user confirmation to close it. While status is `ready`, keep accepting adjustments in the same change. If the user requests another adjustment, call `operation: "reopen"` with the current `expected_version`, continue the existing change, and return to verification before requesting confirmation again.
+
+Only after the user explicitly confirms closure may you call `operation: "complete"` with `confirmation: "explicit_user_confirmation"`, a concise summary, and `next_action: "No further action"`. A completed or aborted change is terminal and cannot be mutated.

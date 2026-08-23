@@ -8,7 +8,7 @@ const LOCK_WAIT_MS = 250
 const LOCK_STALE_MS = 2 * DEFAULT_LEASE_MS
 
 const PHASES = ["discovery", "planning", "implementation", "verification", "delivery"] as const
-const STATUSES = ["active", "blocked", "completed", "aborted"] as const
+const STATUSES = ["active", "ready", "completed", "blocked", "aborted"] as const
 type Phase = (typeof PHASES)[number]
 type Status = (typeof STATUSES)[number]
 
@@ -340,9 +340,9 @@ function result(state: WorkflowState, message: string): { title: string; output:
 }
 
 export default tool({
-  description: "Manage the selectable OpenCode workflow state persisted in Engram. Mutations require the current version and are owned by workflow-lead.",
+  description: "Manage the selectable OpenCode workflow state persisted in Engram. Mutations require the current version and are owned by workflow-lead; ready changes can be explicitly reopened or closed from a user-confirmed session.",
   args: {
-    operation: tool.schema.enum(["start", "status", "claim", "transition", "checkpoint", "consultation", "recover", "complete", "abort"]),
+    operation: tool.schema.enum(["start", "status", "claim", "transition", "checkpoint", "consultation", "recover", "ready", "complete", "reopen", "abort"]),
     change_id: tool.schema.string().describe("Stable change identifier"),
     goal: tool.schema.string().optional().describe("Required for start"),
     acceptance_criteria: tool.schema.array(tool.schema.string()).optional(),
@@ -351,6 +351,7 @@ export default tool({
     next_action: tool.schema.string().optional(),
     expected_version: tool.schema.number().int().nonnegative().optional(),
     consultation_kind: tool.schema.enum(["consultation", "review"]).optional(),
+    confirmation: tool.schema.enum(["explicit_user_confirmation"]).optional().describe("Required to close a ready workflow after the user explicitly confirms completion"),
   },
   async execute(args, context) {
     const changeId = safeChangeId(args.change_id)
@@ -414,9 +415,32 @@ export default tool({
         const kind = args.consultation_kind ?? "consultation"
         state = event(state, kind, summary || `${kind} recorded`, context.agent, context.sessionID)
         state.consultations = [...state.consultations, { kind, actor: context.agent, sessionID: context.sessionID, summary: summary || `${kind} recorded`, at: state.updatedAt }].slice(-100)
-      } else {
+      } else if (operation === "ready") {
         requireExpected(state, args.expected_version)
         ensureOwner(state, context.sessionID)
+        if (state.status !== "active") throw new Error(`workflow must be active before requesting completion (current status: ${state.status})`)
+        if (state.phase !== "verification" && state.phase !== "delivery") throw new Error(`workflow must be in verification or delivery before requesting completion (current phase: ${state.phase})`)
+        state = event(state, "ready_for_confirmation", summary || "Implementation is ready; waiting for explicit user confirmation", context.agent, context.sessionID)
+        state.status = "ready"
+        state.phase = "delivery"
+        state.nextAction = asText(args.next_action) || "Await explicit user confirmation before completing this change"
+      } else if (operation === "reopen") {
+        requireExpected(state, args.expected_version)
+        if (state.status !== "ready") throw new Error(`only a ready workflow can be reopened (current status: ${state.status})`)
+        state.owner = { ...state.owner, agent: WORKFLOW_AGENT, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
+        state = event(state, "reopened", summary || "User requested another adjustment before completion", context.agent, context.sessionID)
+        state.status = "active"
+        state.phase = "verification"
+        state.nextAction = asText(args.next_action) || "Re-evaluate the requested adjustment and continue the existing change"
+      } else {
+        requireExpected(state, args.expected_version)
+        if (operation === "complete" && state.status === "ready") {
+          if (args.confirmation !== "explicit_user_confirmation") throw new Error("explicit user confirmation is required before completing this workflow")
+          state.owner = { ...state.owner, agent: WORKFLOW_AGENT, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
+        } else {
+          ensureOwner(state, context.sessionID)
+        }
+        if (state.status === "completed" || state.status === "aborted") throw new Error(`cannot mutate a terminal workflow (${state.status})`)
         const nextAction = asText(args.next_action)
         if (operation === "transition") {
           if (!args.phase || !transitionAllowed(state.phase, args.phase)) throw new Error(`invalid phase transition ${state.phase} -> ${args.phase ?? "(missing)"}`)
@@ -427,6 +451,8 @@ export default tool({
           state = event(state, "checkpoint", summary || "Checkpoint", context.agent, context.sessionID)
           if (nextAction) state.nextAction = nextAction
         } else if (operation === "complete") {
+          if (state.status !== "ready") throw new Error(`workflow must be ready and explicitly confirmed before completion (current status: ${state.status})`)
+          if (args.confirmation !== "explicit_user_confirmation") throw new Error("explicit user confirmation is required before completing this workflow")
           state = event(state, "completed", summary || "Completed", context.agent, context.sessionID)
           state.status = "completed"
           state.phase = "delivery"

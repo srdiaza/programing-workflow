@@ -17,3 +17,5 @@ Use `workflow-ai deps install` to fill missing local runtimes and registrations,
 An ordinary OpenCode upgrade should preserve unknown files in `~/.config/opencode/`. A full configuration reset or a tool that prunes unknown extensions can remove them. Re-run `./install.sh` from this repository to restore the additive bundle. The installer does not delete unrelated files.
 
 The workflow relies on global agent/command/skill/tool/plugin discovery, the `--agent` and `--model` CLI flags, the OpenCode plugin API, Engram MCP/HTTP, CodeGraph, and Context7. If `doctor` reports an incompatible API, stop before starting a change and inspect the installed versions.
+
+Completion is an explicit user decision. A verified change remains `ready` until the user invokes `workflow-ai complete <change-id>` or `/work-complete <change-id>`; this leaves room for follow-up adjustments without creating a second change.

@@ -33,6 +33,7 @@ Required discipline:
 6. Record checkpoints and consultations.
 7. Recover stale ownership explicitly after restart or compaction.
 8. Complete only after verification and acceptance criteria pass.
+9. Reaching verification success means the change is ready for user confirmation, not completed. Use `workflow_state` operation `ready`, wait for an explicit user instruction to close, and use `complete` only with `confirmation: "explicit_user_confirmation"`. If the user requests an adjustment while ready, use `reopen` and continue the same change-id.
 
 ## Configured routing
 
