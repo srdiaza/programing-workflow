@@ -37,6 +37,8 @@ It also asks whether consultation and review are required or optional. These cho
 
 You can run `workflow-ai configure` again whenever you want to change the model assigned to an area.
 
+The model step is a numbered selector populated from the models available to your OpenCode installation. Press Enter to keep the current choice, choose a number to assign another model, or use the manual option only for a model that is not listed. Each assignment shows what that role does before you choose its model.
+
 ### 3. Open a project and select the Lead
 
 Go to the project you want to work on:

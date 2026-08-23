@@ -15,6 +15,12 @@ type WorkflowConfig = {
   engram_url: string
 }
 
+type ModelAssignment = {
+  path: string
+  label: string
+  description: string
+}
+
 const home = process.env.HOME || "/tmp"
 const opencodeRoot = process.env.OPENCODE_CONFIG_ROOT || `${home}/.config/opencode`
 const configPath = process.env.CONTINUOUS_WORKFLOW_CONFIG || `${opencodeRoot}/continuous-workflow/config.json`
@@ -101,11 +107,96 @@ function validModel(value: string): boolean {
   return /^[^\s/]+\/[^\s]+$/.test(value)
 }
 
-async function askModel(rl: ReturnType<typeof createInterface>, label: string, current: string): Promise<string> {
+const modelAssignments: ModelAssignment[] = [
+  {
+    path: "lead_model",
+    label: "Lead",
+    description: "Es dueño del cambio completo: objetivo, plan, implementación, verificación, recuperación y solicitud de cierre.",
+  },
+  {
+    path: "areas.discovery",
+    label: "Discovery",
+    description: "Mapea el proyecto existente, encuentra código y reglas relevantes e identifica incógnitas antes de implementar.",
+  },
+  {
+    path: "areas.architecture",
+    label: "Architecture",
+    description: "Evalúa límites, dependencias, flujo de datos, trade-offs y el diseño más seguro para el cambio.",
+  },
+  {
+    path: "areas.frontend",
+    label: "Frontend",
+    description: "Asesora sobre comportamiento de UI, estado, accesibilidad, integración cliente y pruebas frontend.",
+  },
+  {
+    path: "areas.backend",
+    label: "Backend",
+    description: "Asesora sobre servicios, APIs, persistencia, reglas de negocio, migraciones y pruebas backend.",
+  },
+  {
+    path: "areas.security",
+    label: "Security",
+    description: "Busca riesgos de privilegios, validación, exposición de datos, dependencias y abuso.",
+  },
+  {
+    path: "areas.reliability",
+    label: "Reliability",
+    description: "Busca fallos, casos límite, observabilidad, recuperación, rendimiento y regresiones.",
+  },
+  {
+    path: "reviewer_model",
+    label: "Reviewer",
+    description: "Hace una revisión final independiente centrada en corrección, regresiones, pruebas e impacto para el usuario.",
+  },
+]
+
+function discoverModels(currentValues: string[]): string[] {
+  const binary = Bun.which("opencode")
+  const discovered: string[] = []
+  if (binary) {
+    const result = Bun.spawnSync([binary, "models"])
+    const output = `${result.stdout.toString()}\n${result.stderr.toString()}`
+    for (const line of output.split(/\r?\n/)) {
+      const model = line.trim()
+      if (validModel(model)) discovered.push(model)
+    }
+  }
+  return [...new Set([...discovered, ...currentValues])]
+}
+
+function printModelCatalog(models: string[]): void {
+  console.log("Modelos disponibles detectados en OpenCode:")
+  if (!models.length) {
+    console.log("  (No se pudo obtener el catálogo; puedes usar la opción manual.)")
+    return
+  }
+  models.forEach((model, index) => console.log(`  ${String(index + 1).padStart(2, " ")}) ${model}`))
+  console.log("  m) Introducir un modelo manualmente (opción avanzada)")
+}
+
+async function askModel(
+  rl: ReturnType<typeof createInterface>,
+  assignment: ModelAssignment,
+  current: string,
+  models: string[],
+): Promise<string> {
   while (true) {
-    const answer = (await rl.question(`${label} [${current}]: `)).trim() || current
-    if (validModel(answer)) return answer
-    console.log("Use el formato provider/model, por ejemplo openai/gpt-5.6-luna.")
+    console.log(`\n${assignment.label}`)
+    console.log(`  ${assignment.description}`)
+    console.log(`  Actual: ${current}`)
+    const answer = (await rl.question("  Selecciona el número, Enter para conservarlo, o m para escribirlo: ")).trim()
+    if (!answer) return current
+    if (answer.toLowerCase() === "m") {
+      const manual = (await rl.question("  Modelo (provider/model): ")).trim()
+      if (validModel(manual)) return manual
+      console.log("  Formato no válido. Usa provider/model, por ejemplo openai/gpt-5.6-luna.")
+      continue
+    }
+    if (/^\d+$/.test(answer)) {
+      const selected = models[Number(answer) - 1]
+      if (selected) return selected
+    }
+    console.log("  Selección no válida. Elige un número del catálogo, Enter o m.")
   }
 }
 
@@ -124,11 +215,18 @@ async function configure(): Promise<void> {
   try {
     console.log("\nContinuous Workflow — configuración independiente\n")
     console.log("Los modelos se aplican únicamente a los agentes workflow-*; el agente por defecto no se modifica.\n")
-    config.lead_model = await askModel(rl, "Modelo del Lead", config.lead_model)
-    for (const area of Object.keys(config.areas) as AreaName[]) {
-      config.areas[area] = await askModel(rl, `Modelo para ${area}`, config.areas[area])
+    const currentModels = modelAssignments.map((assignment) => modelValue(config, assignment.path))
+    const models = discoverModels(currentModels)
+    printModelCatalog(models)
+    for (const assignment of modelAssignments) {
+      const selected = await askModel(rl, assignment, modelValue(config, assignment.path), models)
+      if (assignment.path === "lead_model") config.lead_model = selected
+      else if (assignment.path === "reviewer_model") config.reviewer_model = selected
+      else {
+        const area = assignment.path.split(".")[1] as AreaName
+        config.areas[area] = selected
+      }
     }
-    config.reviewer_model = await askModel(rl, "Modelo del reviewer", config.reviewer_model)
     config.review_policy = await askChoice(rl, "Política de revisión", config.review_policy, ["required", "optional", "disabled"] as const)
     config.consultation_policy = await askChoice(rl, "Política de consultores", config.consultation_policy, ["always", "on-demand"] as const)
     const engram = (await rl.question(`URL de Engram [${config.engram_url}]: `)).trim()
