@@ -4,6 +4,8 @@ This workflow uses Engram as its persistent memory and lifecycle backend. The re
 
 Pinned release: `1.20.0`
 
+From an installed workflow checkout, use `workflow-ai deps install` to install it when absent or `workflow-ai deps update` to re-download this pinned release. `workflow-ai deps status` reports the installed version and MCP registration.
+
 The installer registers Engram's stdio MCP server as:
 
 ```json

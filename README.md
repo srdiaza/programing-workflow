@@ -13,6 +13,16 @@ workflow-ai doctor
 
 The installer installs the workflow agents, commands, skill, state tool, plugin, Engram runtime, and MCP registrations. Existing OpenCode settings are merged additively; existing values are preserved.
 
+Dependency lifecycle is explicit and selectable:
+
+```bash
+workflow-ai deps status
+workflow-ai deps install
+workflow-ai deps update
+```
+
+`install` fills missing Engram, CodeGraph, and MCP registrations. `update` downloads the pinned Engram release and npm CodeGraph version, then re-validates the registrations. Context7 is a remote MCP in this setup, so there is no local binary to replace; its registration is installed or preserved and the service is updated by its provider.
+
 ## Start
 
 ```bash

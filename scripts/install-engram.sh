@@ -4,7 +4,7 @@ set -euo pipefail
 ENGRAM_VERSION="${ENGRAM_VERSION:-1.20.0}"
 INSTALL_DIR="${ENGRAM_INSTALL_DIR:-${HOME}/.local/bin}"
 
-if command -v engram >/dev/null 2>&1; then
+if command -v engram >/dev/null 2>&1 && [[ "${ENGRAM_UPDATE:-0}" != "1" ]]; then
   echo "Engram already available: $(command -v engram)"
   engram version 2>/dev/null || true
   exit 0

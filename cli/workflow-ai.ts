@@ -19,6 +19,7 @@ const home = process.env.HOME || "/tmp"
 const opencodeRoot = process.env.OPENCODE_CONFIG_ROOT || `${home}/.config/opencode`
 const configPath = process.env.CONTINUOUS_WORKFLOW_CONFIG || `${opencodeRoot}/continuous-workflow/config.json`
 const agentRoot = `${opencodeRoot}/agents`
+const workflowRoot = `${opencodeRoot}/continuous-workflow`
 
 const defaults: WorkflowConfig = {
   schema: "continuous-workflow/config/v1",
@@ -160,6 +161,58 @@ async function runOpenCode(args: string[]): Promise<never> {
   process.exit(await child.exited)
 }
 
+function commandEnv(overrides: Record<string, string> = {}): Record<string, string> {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value !== undefined)) as Record<string, string>
+  return { ...env, ...overrides }
+}
+
+async function runDependencyScript(name: string, overrides: Record<string, string> = {}): Promise<void> {
+  const script = `${workflowRoot}/scripts/${name}`
+  if (!(await Bun.file(script).exists())) throw new Error(`dependency script is missing: ${script}; reinstall the workflow bundle`)
+  const child = Bun.spawn(["bash", script], { env: commandEnv(overrides), stdin: "inherit", stdout: "inherit", stderr: "inherit" })
+  const exitCode = await child.exited
+  if (exitCode !== 0) process.exit(exitCode)
+}
+
+function toolVersion(command: string, args: string[]): string {
+  const binary = Bun.which(command)
+  if (!binary) return "MISSING"
+  const result = Bun.spawnSync([binary, ...args])
+  return result.stdout.toString().trim() || result.stderr.toString().trim() || "available"
+}
+
+async function dependencyStatus(): Promise<boolean> {
+  const opencodeConfigPath = `${opencodeRoot}/opencode.json`
+  let mcpConfig: Record<string, unknown> = {}
+  try {
+    const parsed = await Bun.file(opencodeConfigPath).json()
+    mcpConfig = parsed?.mcp && typeof parsed.mcp === "object" ? parsed.mcp as Record<string, unknown> : {}
+  } catch {}
+  const missingMcp = ["engram", "context7", "codegraph"].filter((name) => !mcpConfig[name])
+  console.log(`Engram: ${toolVersion("engram", ["version"])}`)
+  console.log(`CodeGraph: ${toolVersion("codegraph", ["--version"])}`)
+  console.log(`Context7: ${mcpConfig.context7 ? "MCP remoto configurado" : "MISSING MCP registration"}`)
+  console.log(`MCP: ${missingMcp.length ? `missing ${missingMcp.join(", ")}` : "Engram, Context7, CodeGraph configured"}`)
+  return Boolean(Bun.which("engram")) && Boolean(Bun.which("codegraph")) && missingMcp.length === 0
+}
+
+async function dependencies(command: "install" | "update" | "status"): Promise<void> {
+  if (command === "status") {
+    if (!(await dependencyStatus())) process.exitCode = 1
+    return
+  }
+  if (command === "install") {
+    await runDependencyScript("install-engram.sh")
+    await runDependencyScript("install-codegraph.sh")
+  } else {
+    await runDependencyScript("install-engram.sh", { ENGRAM_UPDATE: "1" })
+    await runDependencyScript("install-codegraph.sh", { CODEGRAPH_UPDATE: "1" })
+  }
+  await runDependencyScript("install-mcp.sh")
+  console.log(`Dependencies ${command === "update" ? "updated" : "installed"}.`)
+  if (!(await dependencyStatus())) process.exitCode = 1
+}
+
 async function doctor(): Promise<void> {
   const config = (await loadConfig()) ?? defaults
   const requiredAgents = Object.keys(agentModels)
@@ -193,12 +246,17 @@ async function doctor(): Promise<void> {
 }
 
 function usage(): void {
-  console.log(`workflow-ai — selectable Continuous Workflow\n\nCommands:\n  configure              Configure models, policies, and Engram endpoint\n  show                   Show the effective configuration\n  start [opencode args]  Start an interactive workflow-lead session\n  run [message..]        Run a non-interactive workflow-lead request\n  status <change-id>     Read persisted workflow status\n  resume <change-id>     Recover/continue a persisted workflow\n  sync                   Reapply configured models to workflow-* agents\n  doctor                 Check installation and compatibility\n\nExamples:\n  workflow-ai configure\n  workflow-ai start --dir /path/to/project\n  workflow-ai run --dir /path/to/project "implement feature X"\n  workflow-ai status feature-x`)
+  console.log(`workflow-ai — selectable Continuous Workflow\n\nCommands:\n  configure              Configure models, policies, and Engram endpoint\n  deps install           Install missing Engram, CodeGraph, and MCP registrations\n  deps update            Update pinned Engram and CodeGraph versions\n  deps status            Show dependency versions and Context7 registration\n  show                   Show the effective configuration\n  start [opencode args]  Start an interactive workflow-lead session\n  run [message..]        Run a non-interactive workflow-lead request\n  status <change-id>     Read persisted workflow status\n  resume <change-id>     Recover/continue a persisted workflow\n  sync                   Reapply configured models to workflow-* agents\n  doctor                 Check installation and compatibility\n\nExamples:\n  workflow-ai configure\n  workflow-ai deps status\n  workflow-ai deps update\n  workflow-ai start --dir /path/to/project\n  workflow-ai run --dir /path/to/project "implement feature X"\n  workflow-ai status feature-x`)
 }
 
 async function main(): Promise<void> {
   const [command = "help", ...args] = process.argv.slice(2)
   if (command === "configure") return configure()
+  if (command === "deps" || command === "dependencies") {
+    const dependencyCommand = args[0] as "install" | "update" | "status" | undefined
+    if (!dependencyCommand || !["install", "update", "status"].includes(dependencyCommand)) throw new Error("deps requiere install, update o status")
+    return dependencies(dependencyCommand)
+  }
   if (command === "show" || command === "config") return showConfig()
   if (command === "doctor") return doctor()
   if (command === "sync") {
