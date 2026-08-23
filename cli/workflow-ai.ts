@@ -16,7 +16,7 @@ type WorkflowConfig = {
 }
 
 const home = process.env.HOME || "/tmp"
-const opencodeRoot = `${home}/.config/opencode`
+const opencodeRoot = process.env.OPENCODE_CONFIG_ROOT || `${home}/.config/opencode`
 const configPath = process.env.CONTINUOUS_WORKFLOW_CONFIG || `${opencodeRoot}/continuous-workflow/config.json`
 const agentRoot = `${opencodeRoot}/agents`
 
@@ -122,7 +122,7 @@ async function configure(): Promise<void> {
   const rl = createInterface({ input, output })
   try {
     console.log("\nContinuous Workflow — configuración independiente\n")
-    console.log("Los modelos se aplican únicamente a los agentes workflow-*; Gentle-AI y el agente por defecto no se modifican.\n")
+    console.log("Los modelos se aplican únicamente a los agentes workflow-*; el agente por defecto no se modifica.\n")
     config.lead_model = await askModel(rl, "Modelo del Lead", config.lead_model)
     for (const area of Object.keys(config.areas) as AreaName[]) {
       config.areas[area] = await askModel(rl, `Modelo para ${area}`, config.areas[area])
@@ -165,11 +165,20 @@ async function doctor(): Promise<void> {
   const requiredAgents = Object.keys(agentModels)
   const missing = []
   for (const agent of requiredAgents) if (!(await Bun.file(`${agentRoot}/${agent}.md`).exists())) missing.push(agent)
-  let healthy = missing.length === 0 && Boolean(Bun.which("opencode")) && Boolean(Bun.which("engram"))
+  const opencodeConfigPath = `${opencodeRoot}/opencode.json`
+  let mcpConfig: Record<string, unknown> = {}
+  try {
+    const parsed = await Bun.file(opencodeConfigPath).json()
+    mcpConfig = parsed?.mcp && typeof parsed.mcp === "object" ? parsed.mcp as Record<string, unknown> : {}
+  } catch {}
+  const mcpMissing = ["engram", "context7", "codegraph"].filter((name) => !mcpConfig[name])
+  let healthy = missing.length === 0 && mcpMissing.length === 0 && Boolean(Bun.which("opencode")) && Boolean(Bun.which("engram")) && Boolean(Bun.which("codegraph"))
   console.log(`workflow-ai config: ${configPath} ${await Bun.file(configPath).exists() ? "present" : "not created (defaults active)"}`)
   console.log(`opencode: ${Bun.which("opencode") ? "available" : "MISSING"}`)
   console.log(`engram: ${Bun.which("engram") ? "available" : "MISSING"}`)
+  console.log(`codegraph: ${Bun.which("codegraph") ? "available" : "MISSING"}`)
   console.log(`workflow agents: ${missing.length ? `missing ${missing.join(", ")}` : "all present"}`)
+  console.log(`MCP registrations: ${mcpMissing.length ? `missing ${mcpMissing.join(", ")}` : "engram, context7, codegraph"}`)
   console.log(`engram_url: ${config.engram_url}`)
   if (Bun.which("opencode")) {
     const version = Bun.spawnSync(["opencode", "--version"])

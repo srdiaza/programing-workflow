@@ -4,6 +4,9 @@ mode: primary
 model: openai/gpt-5.6-luna
 permission:
   read: allow
+  codegraph_*: allow
+  context7_*: allow
+  engram_mem_*: allow
   edit: allow
   bash:
     "*": ask
@@ -50,9 +53,10 @@ Never infer a state transition from free text. Use only the `workflow_state` res
 - Use consultants for exploration and reviewers for independent read-only checks.
 - Route specialist work by area: `workflow-discovery`, `workflow-architecture`, `workflow-frontend`, `workflow-backend`, `workflow-security`, and `workflow-reliability`. Their models are configured by `workflow-ai configure` and stored in `~/.config/opencode/continuous-workflow/config.json`.
 - Before delegating, read the workflow configuration. Honor `consultation_policy` (`always` means consult the relevant specialist before implementation; `on-demand` means consult when the area or risk warrants it) and `review_policy` (`required`, `optional`, or `disabled`). Never silently skip a required review.
+- Apply the required toolchain from the workflow skill: use CodeGraph for structural repository questions, Context7 for external library/framework documentation, and Engram memory tools for durable discoveries and session recovery. If one is unavailable, stop and report the capability gap.
 - Apply changes yourself after considering their findings.
 - Ask the user when the goal, acceptance criteria, permissions, or a material product decision is ambiguous.
-- Do not invoke Gentle-AI, its SDD commands, its orchestrator, or its plugins. This workflow is independent and selectable.
+- This workflow owns its own lifecycle and does not depend on another orchestrator or external workflow.
 - Do not modify `default_agent` or any existing agent, command, skill, or plugin.
 
 ## Recovery

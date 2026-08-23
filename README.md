@@ -1,49 +1,52 @@
-# Selectable Continuous Workflow for OpenCode
+# Programing Workflow
 
-This package is additive. It does not replace or remove Gentle-AI, existing OpenCode agents, commands, skills, plugins, MCP servers, or the configured default agent.
+An independent, selectable workflow for OpenCode. It gives one Lead ownership of the goal, plan, implementation, verification, recovery, and delivery while read-only specialists provide evidence-backed advice.
 
-## Components
-
-- `agents/workflow-lead.md`: selectable primary Lead.
-- `agents/workflow-consultant.md`: read-only exploration consultant.
-- `agents/workflow-reviewer.md`: read-only acceptance/risk reviewer.
-- `agents/workflow-{discovery,architecture,frontend,backend,security,reliability}.md`: read-only area specialists with independently configurable models.
-- `tools/workflow_state.ts`: Engram-backed state tool with version checks and per-change locking.
-- `plugins/continuous_workflow.ts`: opt-in compaction reminder; inert outside `workflow-lead` sessions.
-- `skills/continuous-workflow/SKILL.md`: protocol loaded only by the new agents.
-- `commands/work*.md`: selectable workflow commands.
-
-## Activation
-
-Install the additive bundle from a clone:
+## Install
 
 ```bash
+git clone https://github.com/srdiaza/programing-workflow.git
+cd programing-workflow
 ./install.sh
 workflow-ai doctor
 ```
 
-```bash
-opencode --agent workflow-lead
-```
+The installer installs the workflow agents, commands, skill, state tool, plugin, Engram runtime, and MCP registrations. Existing OpenCode settings are merged additively; existing values are preserved.
 
-For an interactive launcher equivalent to the Gentle-AI terminal experience:
+## Start
 
 ```bash
 workflow-ai configure
 workflow-ai start --dir /path/to/project
-workflow-ai status change-id
+workflow-ai run --dir /path/to/project "implement feature X"
+workflow-ai status feature-x
+workflow-ai resume feature-x
 ```
 
-The launcher stores only its own configuration at `~/.config/opencode/continuous-workflow/config.json` and synchronizes only `workflow-*` agent model lines. It never changes `opencode.json`, the default agent, or Gentle-AI files.
+The workflow is explicitly selected. Starting OpenCode normally does not select it.
 
-Or select `workflow-lead` from OpenCode's agent picker. The existing default agent is intentionally unchanged.
+## Required toolchain
 
-## State
+The agents use three shared tools as part of their operating contract:
 
-Engram stores one compact state observation per change with topic key `workflow/<change-id>`. The custom tool serializes mutations with a lock under `~/.local/share/opencode/continuous-workflow/locks/` and requires the current `expected_version` for every mutation.
+- Engram: canonical cross-session memory and workflow persistence. The installer pins the runtime version and registers its MCP server.
+- CodeGraph: structural repository intelligence. Use `codegraph_codegraph_explore` when exposed; otherwise use the `codegraph` CLI and initialize a project index before broad searches.
+- Context7: current library and framework documentation. Resolve a library first, then query its official documentation before relying on external API behavior.
 
-## Deliberate limits
+If a required tool is unavailable, the agent reports the missing capability instead of inventing an answer or silently treating a broad filesystem search as equivalent evidence.
 
-The workflow tool does not call Gentle-AI, does not edit existing configuration, and does not treat conversation text or todos as canonical state. The compaction hook is advisory; recovery is performed by the state tool.
+## Configuration
 
-See `COMPATIBILITY.md` for the post-upgrade checks and recovery path.
+`workflow-ai configure` stores the workflow-only configuration at:
+
+```text
+~/.config/opencode/continuous-workflow/config.json
+```
+
+It configures the Lead model, each area specialist model, reviewer model, consultation/review policy, and Engram HTTP endpoint. The configuration is synchronized only into `workflow-*` agents.
+
+## State and recovery
+
+Engram stores one canonical state observation per change using topic `workflow/<change-id>`. The state tool uses expected versions, ownership leases, and filesystem locks. After a restart or compaction, the Lead reloads state before acting and explicitly recovers stale ownership.
+
+See `COMPATIBILITY.md` for upgrade checks and `engram/README.md` for the pinned Engram dependency.

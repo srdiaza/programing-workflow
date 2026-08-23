@@ -1,16 +1,16 @@
 # Compatibility and upgrades
 
-The workflow is installed as user-owned OpenCode extensions. It does not change `opencode.json`, `default_agent`, Gentle-AI files, or existing agent names.
+The workflow is installed as user-owned OpenCode extensions with names under the `workflow-*` namespace. The installer merges only missing MCP entries and preserves existing configuration values.
 
-After upgrading OpenCode, run:
+After upgrading OpenCode or the workflow dependencies, run:
 
 ```bash
 workflow-ai doctor
 workflow-ai sync
 ```
 
-`doctor` checks that OpenCode can discover `workflow-lead`, that the `workflow_state` tool is available, that all area agents exist, and that Engram is installed. `sync` reapplies only model lines from the workflow configuration to `workflow-*` agents.
+`doctor` checks OpenCode discovery, the state tool, Engram, CodeGraph, Context7, all area agents, and the MCP registrations. `sync` reapplies only model lines from the workflow configuration.
 
-An ordinary OpenCode upgrade should preserve unknown files in `~/.config/opencode/`. An uninstall, a full configuration reset, or a third-party sync that prunes unknown files can remove them. In that case reinstall this additive bundle from its source repository; do not run a Gentle-AI restore or alter the existing default agent.
+An ordinary OpenCode upgrade should preserve unknown files in `~/.config/opencode/`. A full configuration reset or a tool that prunes unknown extensions can remove them. Re-run `./install.sh` from this repository to restore the additive bundle. The installer does not delete unrelated files.
 
-The workflow relies on stable OpenCode surfaces: global agent/command/skill/tool/plugin discovery, the `--agent` and `--model` CLI flags, and the plugin package API. The plugin hook is advisory only; Engram plus `workflow_state` remains the authority. If the API check fails, stop and inspect the installed OpenCode version before running a change.
+The workflow relies on global agent/command/skill/tool/plugin discovery, the `--agent` and `--model` CLI flags, the OpenCode plugin API, Engram MCP/HTTP, CodeGraph, and Context7. If `doctor` reports an incompatible API, stop before starting a change and inspect the installed versions.
