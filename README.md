@@ -39,7 +39,7 @@ It also asks whether consultation and review are required or optional. These cho
 
 You can run `workflow-ai configure` again whenever you want to change the model assigned to an area.
 
-The model step is a search-based picker populated from the models available to your OpenCode installation. Type part of a provider or model name, such as `luna`, `deepseek`, `kimi`, or `minimax`; refine the text if several matches remain. Press Enter to keep the current choice, or type `manual` only for a model that is not listed. After selecting a model, choose its supported thinking level by name (`default`, `medium`, `high`, `max`, or another level declared by that provider). If the provider does not publish its variants, the workflow lets you enter the provider's variant name manually instead of hiding the setting. Each assignment explains the responsibility of the role before you choose its model and thinking level.
+The model step is a real terminal picker populated from the models available to your OpenCode installation. Type part of a provider or model name, such as `luna`, `deepseek`, `kimi`, or `minimax`, then use `↑`/`↓` to move through the filtered matches and `Enter` to choose. The picker shows only the active match instead of dumping a numbered list. Press `Tab` for a model that is not listed, or `Esc` to keep the current choice. The thinking-level step uses the same `↑`/`↓` and `Enter` interaction, with a description of the active level. If the provider does not publish its variants, the workflow lets you enter the provider's variant name manually instead of hiding the setting. Each assignment explains the responsibility of the role before you choose its model and thinking level.
 
 ### 3. Open a project and select the Lead
 

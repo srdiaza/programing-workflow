@@ -325,20 +325,118 @@ function printModelCatalogSummary(models: ModelOption[]): void {
     console.log("No se pudo obtener el catálogo de modelos. Puedes usar la opción manual.")
     return
   }
-  console.log(`Se detectaron ${models.length} modelos disponibles en OpenCode.`)
-  console.log("Busca por nombre o proveedor (por ejemplo: luna, deepseek, kimi, minimax). Escribe ? para ver coincidencias.")
+  console.log("Catálogo de modelos conectado a OpenCode.")
+  console.log("Escribe para filtrar; usa ↑/↓ para moverte, Enter para elegir y Tab para introducir un modelo manual.")
 }
 
-function printModelMatches(matches: ModelOption[]): void {
-  console.log("Coincidencias:")
-  for (const model of matches) {
-    const variants = !model.variantsKnown
-      ? " — niveles no consultados"
-      : model.variants.length
-        ? ` — pensamiento: ${model.variants.join(", ")}`
-        : " — sin niveles declarados"
-    console.log(`  ${model.id}${variants}`)
-  }
+type PickerResult<T> =
+  | { kind: "selected"; value: T }
+  | { kind: "manual" }
+  | { kind: "cancel" }
+  | { kind: "unavailable" }
+
+function interactiveTerminal(): boolean {
+  return Boolean(input.isTTY && output.isTTY && typeof input.setRawMode === "function")
+}
+
+async function interactivePicker<T>(options: {
+  values: T[]
+  current: T
+  search: boolean
+  allowManual?: boolean
+  prompt: string
+  matches: (query: string) => T[]
+  label: (value: T) => string
+  detail?: (value: T) => string
+}): Promise<PickerResult<T>> {
+  if (!interactiveTerminal()) return { kind: "unavailable" }
+  const initialIndex = Math.max(0, options.values.indexOf(options.current))
+  let query = ""
+  let activeIndex = initialIndex
+  let matches = options.matches(query)
+  if (!matches.length) matches = options.values
+  activeIndex = Math.max(0, matches.indexOf(options.current))
+  rlPauseForPicker()
+  input.setRawMode(true)
+  input.resume()
+  return await new Promise<PickerResult<T>>((resolve) => {
+    const render = () => {
+      const active = matches[activeIndex]
+      const searchText = query ? `buscar: ${query}` : `actual: ${options.label(options.current)}`
+      const candidate = active ? ` → ${options.label(active)}` : " → sin coincidencias"
+      const detail = active && options.detail ? ` — ${options.detail(active)}` : ""
+      const navigation = options.allowManual ? "↑↓ mover · Enter elegir · Tab manual · Esc cancelar" : "↑↓ mover · Enter elegir · Esc cancelar"
+      output.write(`\r\x1b[2K  ${options.prompt} · ${searchText}${candidate}${detail}  [${navigation}]`)
+    }
+    const finish = (result: PickerResult<T>) => {
+      input.off("data", onData)
+      input.setRawMode(false)
+      input.pause()
+      output.write("\n")
+      rlResumeAfterPicker()
+      resolve(result)
+    }
+    const updateMatches = () => {
+      matches = options.matches(query)
+      activeIndex = Math.max(0, Math.min(activeIndex, matches.length - 1))
+      if (!matches.length) activeIndex = 0
+      render()
+    }
+    const onData = (chunk: Buffer | string) => {
+      let data = String(chunk)
+      while (data.length) {
+        if (data.startsWith("\x1b[A")) {
+          if (matches.length) activeIndex = (activeIndex + matches.length - 1) % matches.length
+          data = data.slice(3)
+        } else if (data.startsWith("\x1b[B")) {
+          if (matches.length) activeIndex = (activeIndex + 1) % matches.length
+          data = data.slice(3)
+        } else if (data.startsWith("\x1b")) {
+          finish({ kind: "cancel" })
+          return
+        } else {
+          const char = data[0]
+          data = data.slice(1)
+          if (char === "\u0003") {
+            finish({ kind: "cancel" })
+            return
+          }
+          if (char === "\r" || char === "\n") {
+            if (matches[activeIndex]) finish({ kind: "selected", value: matches[activeIndex] })
+            return
+          }
+          if (char === "\t" && options.allowManual) {
+            finish({ kind: "manual" })
+            return
+          }
+          if (options.search && (char === "\u007f" || char === "\b")) {
+            query = query.slice(0, -1)
+            updateMatches()
+            continue
+          }
+          if (options.search && char >= " " && char !== "\u007f") {
+            query += char
+            activeIndex = 0
+            updateMatches()
+            continue
+          }
+        }
+        render()
+      }
+    }
+    input.on("data", onData)
+    render()
+  })
+}
+
+function rlPauseForPicker(): void {
+  // readline has a data listener even between questions; pausing it prevents
+  // the picker keystrokes from being consumed twice.
+  input.pause()
+}
+
+function rlResumeAfterPicker(): void {
+  input.resume()
 }
 
 async function askModel(
@@ -347,30 +445,42 @@ async function askModel(
   current: string,
   models: ModelOption[],
 ): Promise<ModelOption> {
-  while (true) {
-    console.log(`\n${assignment.label}`)
-    console.log(`  ${assignment.description}`)
-    console.log(`  Actual: ${current}`)
-    const answer = (await rl.question("  Busca un modelo, Enter para conservarlo, ? para listar o escribe manual: ")).trim()
-    if (!answer) return models.find((model) => model.id === current) ?? { id: current, variants: [], variantsKnown: false }
-    if (answer.toLowerCase() === "manual") {
-      const manual = (await rl.question("  Modelo (provider/model): ")).trim()
+  console.log(`\n${assignment.label}`)
+  console.log(`  ${assignment.description}`)
+  console.log(`  Actual: ${current}`)
+  const currentOption = models.find((model) => model.id === current) ?? { id: current, variants: [], variantsKnown: false }
+  const picked = await interactivePicker<ModelOption>({
+    values: models,
+    current: currentOption,
+    search: true,
+    allowManual: true,
+    prompt: "Modelo",
+    matches: (query) => models.filter((model) => !query || model.id.toLowerCase().includes(query.toLowerCase())),
+    label: (model) => model.id,
+    detail: (model) => !model.variantsKnown ? "variantes no consultadas" : model.variants.length ? `pensamiento: ${model.variants.join(", ")}` : "sin niveles declarados",
+  })
+  if (picked.kind === "selected") return picked.value
+  if (picked.kind === "cancel") return currentOption
+  if (picked.kind === "manual") {
+    while (true) {
+      const manual = (await rl.question("  Modelo manual (provider/model): ")).trim()
       if (validModel(manual)) return { id: manual, variants: [], variantsKnown: false }
       console.log("  Formato no válido. Usa provider/model, por ejemplo openai/gpt-5.6-luna.")
-      continue
     }
-    const query = answer === "?" ? "" : answer.toLowerCase()
-    const matches = models.filter((model) => !query || model.id.toLowerCase().includes(query))
-    const exact = models.find((model) => model.id.toLowerCase() === answer.toLowerCase())
-    if (exact) return exact
-    if (matches.length === 1) return matches[0]
-    if (matches.length > 1) {
-      printModelMatches(matches)
-      console.log("  Escribe una búsqueda más específica o el identificador completo.")
-      continue
-    }
-    console.log("  No encontré ese modelo. Prueba otra búsqueda o escribe manual.")
   }
+  if (picked.kind === "unavailable") {
+    while (true) {
+      const answer = (await rl.question("  Modelo (búsqueda, Enter conserva, manual escribe otro): ")).trim()
+      if (!answer) return currentOption
+      if (answer.toLowerCase() === "manual") continue
+      const matches = models.filter((model) => model.id.toLowerCase().includes(answer.toLowerCase()))
+      const exact = models.find((model) => model.id.toLowerCase() === answer.toLowerCase())
+      if (exact || matches.length === 1) return exact ?? matches[0]
+      if (matches.length > 1) console.log("  Hay varias coincidencias; escribe una búsqueda más específica.")
+      else console.log("  No encontré ese modelo. Prueba otra búsqueda o escribe manual.")
+    }
+  }
+  return currentOption
 }
 
 const thinkingDescriptions: Record<string, string> = {
@@ -398,7 +508,6 @@ async function askThinkingLevel(
   const supported = ["default", ...model.variants.filter((variant) => variant !== "default")]
   const currentValue = supported.includes(current) ? current : "default"
   console.log(`  Nivel de pensamiento para ${assignment.label} (${model.id})`)
-  for (const level of supported) console.log(`    ${level}: ${describeThinkingLevel(level)}`)
   if (!model.variantsKnown) {
     console.log("  OpenCode no publicó variantes para este modelo. Puedes escribir el nombre si tu proveedor admite una.")
     while (true) {
@@ -412,13 +521,25 @@ async function askThinkingLevel(
     console.log("  Este modelo no declara variantes de razonamiento; se usará default.")
     return "default"
   }
-  while (true) {
-    const answer = (await rl.question(`  Nivel [${currentValue}] (escribe el nombre, Enter conserva): `)).trim().toLowerCase()
-    if (!answer) return currentValue
-    const match = supported.find((level) => level.toLowerCase() === answer)
-    if (match) return match
-    console.log(`  Nivel no válido. Opciones: ${supported.join(", ")}.`)
+  const picked = await interactivePicker<string>({
+    values: supported,
+    current: currentValue,
+    search: false,
+    prompt: "Pensamiento",
+    matches: () => supported,
+    label: (level) => level,
+    detail: (level) => describeThinkingLevel(level),
+  })
+  if (picked.kind === "unavailable") {
+    while (true) {
+      const answer = (await rl.question(`  Nivel [${currentValue}] (nombre, Enter conserva): `)).trim().toLowerCase()
+      if (!answer) return currentValue
+      const match = supported.find((level) => level.toLowerCase() === answer)
+      if (match) return match
+      console.log(`  Nivel no válido. Prueba una de las variantes admitidas por el modelo.`)
+    }
   }
+  return picked.kind === "selected" ? picked.value : currentValue
 }
 
 async function askChoice<T extends string>(rl: ReturnType<typeof createInterface>, label: string, current: T, choices: readonly T[]): Promise<T> {
