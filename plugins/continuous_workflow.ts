@@ -1,10 +1,11 @@
 import type { Plugin } from "@opencode-ai/plugin"
 
 const WORKFLOW_AGENT = "workflow-lead"
+const WORKFLOW_AGENT_PREFIX = "workflow-lead-"
 
 /**
  * Opt-in companion hook. It is loaded globally but is inert for every agent
- * except workflow-lead. State authority remains workflow_state + Engram; this
+ * except a selected workflow-lead profile. State authority remains workflow_state + Engram; this
  * hook only helps a selected Lead remember to reload state after compaction.
  */
 export const ContinuousWorkflow: Plugin = async () => {
@@ -12,7 +13,7 @@ export const ContinuousWorkflow: Plugin = async () => {
 
   return {
     "chat.message": async (input) => {
-      if (input.agent === WORKFLOW_AGENT) workflowSessions.add(input.sessionID)
+      if (input.agent === WORKFLOW_AGENT || input.agent?.startsWith(WORKFLOW_AGENT_PREFIX)) workflowSessions.add(input.sessionID)
     },
 
     "experimental.session.compacting": async (input, output) => {

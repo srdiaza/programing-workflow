@@ -65,6 +65,17 @@ Never infer a state transition from free text. Use only the `workflow_state` res
 - Keep project-specific files in the project; keep workflow state in Engram under the resolved project.
 - Use consultants for exploration and reviewers for independent read-only checks.
 - Route specialist work by area: `workflow-discovery`, `workflow-architecture`, `workflow-frontend`, `workflow-backend`, `workflow-security`, and `workflow-reliability`. Their models are configured by `workflow-ai configure` and stored in `~/.config/opencode/continuous-workflow/config.json`.
+<!-- workflow-profile-routing-start -->
+## Profile routing
+- Discovery: `workflow-discovery`
+- Architecture: `workflow-architecture`
+- Frontend: `workflow-frontend`
+- Backend: `workflow-backend`
+- Security: `workflow-security`
+- Reliability: `workflow-reliability`
+- Reviewer: `workflow-reviewer`
+- Consultant: `workflow-consultant`
+<!-- workflow-profile-routing-end -->
 - Before delegating, read the workflow configuration. Honor `consultation_policy` (`always` means consult the relevant specialist before implementation; `on-demand` means consult when the area or risk warrants it) and `review_policy` (`required`, `optional`, or `disabled`). Never silently skip a required review.
 - Apply the required toolchain from the workflow skill: use CodeGraph for structural repository questions, Context7 for external library/framework documentation, and Engram memory tools for durable discoveries and session recovery. If one is unavailable, stop and report the capability gap.
 - Apply changes yourself after considering their findings.

@@ -3,13 +3,13 @@ name: continuous-workflow
 description: Use the selectable OpenCode workflow Lead, Engram-backed state, ownership, recovery, consultants, reviewers, and explicit lifecycle transitions.
 metadata:
   version: "1"
-  owner: "workflow-lead"
+  owner: "workflow-lead or workflow-lead-*"
   config: "~/.config/opencode/continuous-workflow/config.json"
 ---
 
 # Continuous Workflow
 
-This skill applies only when the user explicitly selected `workflow-lead` or invoked a `/work-*` command.
+This skill applies only when the user explicitly selected `workflow-lead` or a generated `workflow-lead-*` profile, or invoked a `/work-*` command from one of those Leads.
 
 The canonical state lives in Engram through the `workflow_state` custom tool. Conversation text, todos, summaries, and model memory are not authoritative.
 
@@ -28,8 +28,8 @@ Required discipline:
 1. Read status before acting.
 2. Start a change only when its identifier, goal, and acceptance criteria are known.
 3. Pass `expected_version` to every mutation.
-4. Keep ownership with `workflow-lead`.
-5. Use `workflow-consultant` and `workflow-reviewer` for independent advice.
+4. Keep ownership with the selected `workflow-lead` profile.
+5. Use the consultant and reviewer with the same profile suffix as the selected Lead.
 6. Record checkpoints and consultations.
 7. Recover stale ownership explicitly after restart or compaction.
 8. Complete only after verification and acceptance criteria pass.
@@ -37,6 +37,6 @@ Required discipline:
 
 ## Configured routing
 
-The optional `workflow-ai configure` command owns the workflow configuration. Read `~/.config/opencode/continuous-workflow/config.json` at the beginning of a session. The `lead_model`, area model map, `reviewer_model`, `review_policy`, `consultation_policy`, and `engram_url` are authoritative for this workflow only. The model values are synchronized into the `workflow-*` agent frontmatter; never edit the existing OpenCode configuration to change them.
+The optional `workflow-ai configure` command owns the workflow configuration. Read `~/.config/opencode/continuous-workflow/config.json` at the beginning of a session. The selected profile's Lead model, area model map, reviewer model, thinking variants, permissions, policies, and Engram endpoint are authoritative for that workflow only. The model values are synchronized into that profile's `workflow-*` agent frontmatter; never edit the existing OpenCode configuration to change them.
 
 The workflow is self-contained and selectable. Do not modify unrelated OpenCode agents, commands, skills, plugins, MCP servers, or the configured default agent.

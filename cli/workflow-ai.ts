@@ -17,8 +17,8 @@ type WorkflowPermissions = {
   external_directory: PermissionMode
 }
 
-type WorkflowConfig = {
-  schema: "continuous-workflow/config/v1"
+type WorkflowProfile = {
+  description: string
   lead_model: string
   lead_variant: string
   areas: Record<AreaName, string>
@@ -29,6 +29,17 @@ type WorkflowConfig = {
   consultation_policy: "always" | "on-demand"
   engram_url: string
   permissions: WorkflowPermissions
+}
+
+type WorkflowProfileOverrides = Partial<Omit<WorkflowProfile, "areas" | "area_variants" | "permissions">> & {
+  areas?: Partial<Record<AreaName, string>>
+  area_variants?: Partial<Record<AreaName, string>>
+  permissions?: Partial<WorkflowPermissions>
+}
+
+type WorkflowConfig = WorkflowProfile & {
+  schema: "continuous-workflow/config/v1"
+  profiles: Record<string, WorkflowProfileOverrides>
 }
 
 type ModelAssignment = {
@@ -53,6 +64,7 @@ const workflowStateDirectory = process.env.CONTINUOUS_WORKFLOW_STATE_DIR || `${h
 
 const defaults: WorkflowConfig = {
   schema: "continuous-workflow/config/v1",
+  description: "Perfil normal del workflow; Lead Luna con especialistas configurados por área.",
   lead_model: "openai/gpt-5.6-luna",
   lead_variant: "default",
   areas: {
@@ -84,6 +96,7 @@ const defaults: WorkflowConfig = {
     task: "allow",
     external_directory: "ask",
   },
+  profiles: {},
 }
 
 const agentModels: Record<string, string> = {
@@ -110,13 +123,24 @@ const agentVariants: Record<string, string> = {
   "workflow-consultant": "area_variants.discovery",
 }
 
+function validProfileName(value: string): boolean {
+  return /^[a-z][a-z0-9-]{0,39}$/.test(value) && value !== "default"
+}
+
 function mergeConfig(value: Partial<WorkflowConfig> | undefined): WorkflowConfig {
   const configuredPermissions = value?.permissions as Partial<WorkflowPermissions> | undefined
   const permission = (candidate: unknown, fallback: PermissionMode): PermissionMode => candidate === "allow" || candidate === "ask" || candidate === "deny" ? candidate : fallback
   const questionPermission = configuredPermissions?.question === "deny" ? "deny" : "allow"
+  const configuredProfiles = value?.profiles && typeof value.profiles === "object" ? value.profiles : {}
+  const profiles: Record<string, WorkflowProfileOverrides> = {}
+  for (const [name, profile] of Object.entries(configuredProfiles as Record<string, unknown>)) {
+    if (!validProfileName(name) || !profile || typeof profile !== "object") continue
+    profiles[name] = profile as WorkflowProfileOverrides
+  }
   return {
     ...defaults,
     ...(value ?? {}),
+    description: typeof value?.description === "string" && value.description.trim() ? value.description : defaults.description,
     areas: { ...defaults.areas, ...(value?.areas ?? {}) },
     area_variants: { ...defaults.area_variants, ...(value?.area_variants ?? {}) },
     permissions: {
@@ -127,8 +151,64 @@ function mergeConfig(value: Partial<WorkflowConfig> | undefined): WorkflowConfig
       task: permission(configuredPermissions?.task, defaults.permissions.task),
       external_directory: permission(configuredPermissions?.external_directory, defaults.permissions.external_directory),
     },
+    profiles,
   }
 }
+
+function defaultProfile(config: WorkflowConfig): WorkflowProfile {
+  const { schema: _schema, profiles: _profiles, ...profile } = config
+  return profile
+}
+
+function mergeProfile(base: WorkflowProfile, overrides: WorkflowProfileOverrides | undefined): WorkflowProfile {
+  const permissions = overrides?.permissions ?? {}
+  return {
+    ...base,
+    lead_model: typeof overrides?.lead_model === "string" && overrides.lead_model.trim() ? overrides.lead_model : base.lead_model,
+    lead_variant: typeof overrides?.lead_variant === "string" && overrides.lead_variant.trim() ? overrides.lead_variant : base.lead_variant,
+    description: typeof overrides?.description === "string" && overrides.description.trim() ? overrides.description : base.description,
+    areas: { ...base.areas, ...(overrides?.areas ?? {}) },
+    area_variants: { ...base.area_variants, ...(overrides?.area_variants ?? {}) },
+    reviewer_model: typeof overrides?.reviewer_model === "string" && overrides.reviewer_model.trim() ? overrides.reviewer_model : base.reviewer_model,
+    reviewer_variant: typeof overrides?.reviewer_variant === "string" && overrides.reviewer_variant.trim() ? overrides.reviewer_variant : base.reviewer_variant,
+    review_policy: overrides?.review_policy === "required" || overrides?.review_policy === "optional" || overrides?.review_policy === "disabled" ? overrides.review_policy : base.review_policy,
+    consultation_policy: overrides?.consultation_policy === "always" || overrides?.consultation_policy === "on-demand" ? overrides.consultation_policy : base.consultation_policy,
+    engram_url: typeof overrides?.engram_url === "string" && overrides.engram_url.trim() ? overrides.engram_url : base.engram_url,
+    permissions: {
+      ...base.permissions,
+      ...permissions,
+      edit: permissions.edit === "allow" || permissions.edit === "ask" || permissions.edit === "deny" ? permissions.edit : base.permissions.edit,
+      bash: permissions.bash === "allow" || permissions.bash === "ask" || permissions.bash === "deny" ? permissions.bash : base.permissions.bash,
+      git_push: permissions.git_push === "deny" ? "deny" : permissions.git_push === "ask" ? "ask" : base.permissions.git_push,
+      question: permissions.question === "deny" ? "deny" : permissions.question === "allow" ? "allow" : base.permissions.question,
+      task: permissions.task === "allow" || permissions.task === "ask" || permissions.task === "deny" ? permissions.task : base.permissions.task,
+      external_directory: permissions.external_directory === "allow" || permissions.external_directory === "ask" || permissions.external_directory === "deny" ? permissions.external_directory : base.permissions.external_directory,
+    },
+  }
+}
+
+function profileConfig(config: WorkflowConfig, name: string): WorkflowProfile {
+  if (name === "default") return defaultProfile(config)
+  const overrides = config.profiles[name]
+  if (!overrides) throw new Error(`Unknown workflow profile: ${name}`)
+  return mergeProfile(defaultProfile(config), overrides)
+}
+
+function profileAgentName(base: string, profile: string): string {
+  return profile === "default" ? base : `${base}-${profile}`
+}
+
+const profileAgentBases = [
+  "workflow-lead",
+  "workflow-consultant",
+  "workflow-reviewer",
+  "workflow-discovery",
+  "workflow-architecture",
+  "workflow-frontend",
+  "workflow-backend",
+  "workflow-security",
+  "workflow-reliability",
+]
 
 async function loadConfig(): Promise<WorkflowConfig | null> {
   const file = Bun.file(configPath)
@@ -144,7 +224,7 @@ async function saveConfig(config: WorkflowConfig): Promise<void> {
   await Bun.write(configPath, `${JSON.stringify(config, null, 2)}\n`)
 }
 
-function modelValue(config: WorkflowConfig, path: string): string {
+function modelValue(config: WorkflowProfile, path: string): string {
   if (path === "lead_model") return config.lead_model
   if (path === "reviewer_model") return config.reviewer_model
   const [root, area] = path.split(".")
@@ -152,7 +232,7 @@ function modelValue(config: WorkflowConfig, path: string): string {
   throw new Error(`Unknown model path ${path}`)
 }
 
-function variantValue(config: WorkflowConfig, path: string): string {
+function variantValue(config: WorkflowProfile, path: string): string {
   if (path === "lead_variant") return config.lead_variant || "default"
   if (path === "reviewer_variant") return config.reviewer_variant || "default"
   const [root, area] = path.split(".")
@@ -161,19 +241,35 @@ function variantValue(config: WorkflowConfig, path: string): string {
 }
 
 async function syncAgentModels(config: WorkflowConfig): Promise<void> {
+  await syncProfileAgentModels(defaultProfile(config), "default")
+  for (const profile of Object.keys(config.profiles)) {
+    await syncProfileAgentModels(profileConfig(config, profile), profile)
+  }
+}
+
+async function syncProfileAgentModels(profile: WorkflowProfile, profileName: string): Promise<void> {
   for (const [agent, path] of Object.entries(agentModels)) {
-    const filePath = `${agentRoot}/${agent}.md`
+    const filePath = `${agentRoot}/${profileAgentName(agent, profileName)}.md`
     const file = Bun.file(filePath)
-    if (!(await file.exists())) {
+    if (profileName !== "default") {
+      const basePath = `${agentRoot}/${agent}.md`
+      if (!(await Bun.file(basePath).exists())) {
+        console.error(`warning: profile template not found, skipped: ${basePath}`)
+        continue
+      }
+      // Profile agents are generated artifacts. Re-clone their role template
+      // on every sync so upgrades and repeated syncs never accumulate suffixes.
+      await Bun.write(filePath, await Bun.file(basePath).text())
+    } else if (!(await file.exists())) {
       console.error(`warning: agent file not found, skipped: ${filePath}`)
       continue
     }
     const current = await file.text()
-    const model = modelValue(config, path)
+    const model = modelValue(profile, path)
     let updated = current.match(/^model:\s*.*$/m)
       ? current.replace(/^model:\s*.*$/m, `model: ${model}`)
       : current.replace(/^(mode:\s*.*)$/m, `$1\nmodel: ${model}`)
-    const variant = variantValue(config, agentVariants[agent])
+    const variant = variantValue(profile, agentVariants[agent])
     if (variant && variant !== "default") {
       updated = updated.match(/^variant:\s*.*$/m)
         ? updated.replace(/^variant:\s*.*$/m, `variant: ${variant}`)
@@ -223,33 +319,86 @@ function bashPermissionBlock(mode: PermissionMode, gitPush: "ask" | "deny"): str
   return lines.join("\n")
 }
 
-function taskPermissionBlock(mode: PermissionMode): string {
+function taskPermissionBlock(mode: PermissionMode, profileName = "default"): string {
   return [
     "  task:",
     '    "*": deny',
-    ...workflowSubagents.map((agent) => `    "${agent}": ${mode}`),
+    ...workflowSubagents.map((agent) => `    "${profileAgentName(agent, profileName)}": ${mode}`),
   ].join("\n")
 }
 
-async function syncAgentPermissions(config: WorkflowConfig): Promise<void> {
-  const filePath = `${agentRoot}/workflow-lead.md`
+function profileRoutingBlock(profileName: string): string {
+  const suffix = (base: string) => `\`${profileAgentName(base, profileName)}\``
+  return [
+    "## Profile routing",
+    `- Discovery: ${suffix("workflow-discovery")}`,
+    `- Architecture: ${suffix("workflow-architecture")}`,
+    `- Frontend: ${suffix("workflow-frontend")}`,
+    `- Backend: ${suffix("workflow-backend")}`,
+    `- Security: ${suffix("workflow-security")}`,
+    `- Reliability: ${suffix("workflow-reliability")}`,
+    `- Reviewer: ${suffix("workflow-reviewer")}`,
+    `- Consultant: ${suffix("workflow-consultant")}`,
+  ].join("\n")
+}
+
+function applyProfileIdentity(content: string, baseAgent: string, profileName: string): string {
+  if (profileName === "default") return content
+  const generatedAgent = profileAgentName(baseAgent, profileName)
+  let updated = content
+  updated = updated.replace(/^description:\s*(.*)$/m, (_match, description) => `description: ${description} [perfil ${profileName}]`)
+  updated = updated.replaceAll("workflow-lead", "workflow-lead-" + profileName)
+  updated = updated.replaceAll("workflow-discovery", "workflow-discovery-" + profileName)
+  updated = updated.replaceAll("workflow-architecture", "workflow-architecture-" + profileName)
+  updated = updated.replaceAll("workflow-frontend", "workflow-frontend-" + profileName)
+  updated = updated.replaceAll("workflow-backend", "workflow-backend-" + profileName)
+  updated = updated.replaceAll("workflow-security", "workflow-security-" + profileName)
+  updated = updated.replaceAll("workflow-reliability", "workflow-reliability-" + profileName)
+  updated = updated.replaceAll("workflow-reviewer", "workflow-reviewer-" + profileName)
+  updated = updated.replaceAll("workflow-consultant", "workflow-consultant-" + profileName)
+  updated = updated.replaceAll("__WORKFLOW_PROFILE_AGENT__", generatedAgent)
+  return updated
+}
+
+async function syncLeadPermissions(filePath: string, permissions: WorkflowPermissions, profileName: string): Promise<void> {
   const file = Bun.file(filePath)
   if (!(await file.exists())) {
     console.error(`warning: agent file not found, skipped: ${filePath}`)
     return
   }
-  const permissions = config.permissions
   let current = await file.text()
   current = current.replace(/^  question:\s*.*$/m, `  question: ${permissions.question}`)
   current = current.replace(/^  edit:\s*.*$/m, `  edit: ${permissions.edit}`)
   current = markedBlock(current, "workflow-permissions-bash-start", "workflow-permissions-bash-end", bashPermissionBlock(permissions.bash, permissions.git_push))
-  current = markedBlock(current, "workflow-permissions-task-start", "workflow-permissions-task-end", taskPermissionBlock(permissions.task))
+  current = markedBlock(current, "workflow-permissions-task-start", "workflow-permissions-task-end", taskPermissionBlock(permissions.task, profileName))
   current = markedBlock(current, "workflow-permissions-external-start", "workflow-permissions-external-end", [
     "  external_directory:",
     `    \"*\": ${permissions.external_directory}`,
     `    "${workflowStateDirectory}/*": allow`,
   ].join("\n"))
   if (current !== await file.text()) await Bun.write(filePath, current)
+}
+
+async function syncAgentPermissions(config: WorkflowConfig): Promise<void> {
+  await syncLeadPermissions(`${agentRoot}/workflow-lead.md`, defaultProfile(config).permissions, "default")
+  for (const profile of Object.keys(config.profiles)) {
+    const profileName = profile
+    for (const base of profileAgentBases) {
+      const targetPath = `${agentRoot}/${profileAgentName(base, profileName)}.md`
+      if (!(await Bun.file(targetPath).exists())) continue
+      let content = applyProfileIdentity(await Bun.file(targetPath).text(), base, profileName)
+      if (base === "workflow-lead") {
+        const routingStart = "<!-- workflow-profile-routing-start -->"
+        const routingEnd = "<!-- workflow-profile-routing-end -->"
+        const routingPattern = new RegExp(`${routingStart}[\\s\\S]*?${routingEnd}`)
+        if (routingPattern.test(content)) content = content.replace(routingPattern, `${routingStart}\n${profileRoutingBlock(profileName)}\n${routingEnd}`)
+      }
+      await Bun.write(targetPath, content)
+    }
+    const targetPath = `${agentRoot}/${profileAgentName("workflow-lead", profileName)}.md`
+    if (!(await Bun.file(targetPath).exists())) continue
+    await syncLeadPermissions(targetPath, profileConfig(config, profileName).permissions, profileName)
+  }
 }
 
 function validModel(value: string): boolean {
@@ -1121,9 +1270,42 @@ async function runConfigureTui(config: WorkflowConfig, models: ModelOption[]): P
   })
 }
 
-async function configure(): Promise<void> {
+function profileForTui(profile: WorkflowProfile): WorkflowConfig {
+  return { schema: defaults.schema, profiles: {}, ...profile }
+}
+
+function profileSnapshot(profile: WorkflowProfile, description: string): WorkflowProfileOverrides {
+  return {
+    description,
+    lead_model: profile.lead_model,
+    lead_variant: profile.lead_variant,
+    areas: { ...profile.areas },
+    area_variants: { ...profile.area_variants },
+    reviewer_model: profile.reviewer_model,
+    reviewer_variant: profile.reviewer_variant,
+    review_policy: profile.review_policy,
+    consultation_policy: profile.consultation_policy,
+    engram_url: profile.engram_url,
+    permissions: { ...profile.permissions },
+  }
+}
+
+function applyConfiguredProfile(root: WorkflowConfig, profileName: string, edited: WorkflowConfig): WorkflowConfig {
+  if (profileName === "default") {
+    return mergeConfig({ ...root, ...defaultProfile(edited), profiles: root.profiles })
+  }
+  const existing = root.profiles[profileName]
+  const description = typeof existing?.description === "string" && existing.description.trim()
+    ? existing.description
+    : `Perfil ${profileName}`
+  return { ...root, profiles: { ...root.profiles, [profileName]: profileSnapshot(defaultProfile(edited), description) } }
+}
+
+async function configure(profileName = "default"): Promise<void> {
+  if (profileName !== "default" && !validProfileName(profileName)) throw new Error(`Nombre de perfil inválido: ${profileName}`)
   const existing = await loadConfig()
-  const config = mergeConfig(existing ?? undefined)
+  const rootConfig = mergeConfig(existing ?? undefined)
+  const config = profileForTui(profileConfig(rootConfig, profileName))
   console.log("Preparando el catálogo de modelos…")
   const currentModels = modelAssignments.map((assignment) => modelValue(config, assignment.path))
   const models = await discoverModelCatalog(currentModels)
@@ -1132,18 +1314,52 @@ async function configure(): Promise<void> {
     console.log("Configuración cancelada. No se guardaron cambios.")
     return
   }
-  const finalConfig = configured
+  const finalConfig = applyConfiguredProfile(rootConfig, profileName, configured)
   Bun.spawnSync(["mkdir", "-p", `${opencodeRoot}/continuous-workflow`])
   await saveConfig(finalConfig)
   await syncAgentModels(finalConfig)
   await syncAgentPermissions(finalConfig)
   console.log(`\nConfiguración guardada en ${configPath}`)
-  console.log("Los modelos y permisos del workflow-lead fueron sincronizados.")
+  console.log(`Perfil ${profileName} guardado; modelos, permisos y agentes sincronizados.`)
 }
 
 async function showConfig(): Promise<void> {
   const config = (await loadConfig()) ?? defaults
   console.log(JSON.stringify(config, null, 2))
+}
+
+async function profileCommand(action: string, name?: string): Promise<void> {
+  const config = mergeConfig((await loadConfig()) ?? undefined)
+  if (!action || action === "list") {
+    const names = ["default", ...Object.keys(config.profiles).sort()]
+    for (const profileName of names) {
+      const profile = profileConfig(config, profileName)
+      console.log(`${profileName}\t${profile.lead_model} [${profile.lead_variant}]\t${profile.description}`)
+    }
+    return
+  }
+  if (action === "create" || action === "add") {
+    if (!name || !validProfileName(name)) throw new Error("profile create requiere un nombre (a-z, 0-9 y guiones; debe empezar por letra)")
+    if (config.profiles[name]) throw new Error(`El perfil ${name} ya existe`)
+    const base = defaultProfile(config)
+    config.profiles[name] = profileSnapshot(base, `Perfil ${name}; copia independiente del perfil default.`)
+    await saveConfig(config)
+    await syncAgentModels(config)
+    await syncAgentPermissions(config)
+    console.log(`Perfil ${name} creado.`)
+    console.log(`Ahora configura sus modelos y niveles con: workflow-ai configure --profile ${name}`)
+    return
+  }
+  if (action === "remove" || action === "delete") {
+    if (!name || !validProfileName(name)) throw new Error("profile remove requiere el nombre de un perfil no-default")
+    if (!config.profiles[name]) throw new Error(`El perfil ${name} no existe`)
+    delete config.profiles[name]
+    await saveConfig(config)
+    for (const base of profileAgentBases) await rm(`${agentRoot}/${profileAgentName(base, name)}.md`, { force: true })
+    console.log(`Perfil ${name} eliminado junto con sus agentes generados.`)
+    return
+  }
+  throw new Error("profile requiere list, create o remove")
 }
 
 async function runOpenCode(args: string[]): Promise<never> {
@@ -1208,6 +1424,13 @@ async function doctor(): Promise<void> {
   const requiredAgents = Object.keys(agentModels)
   const missing = []
   for (const agent of requiredAgents) if (!(await Bun.file(`${agentRoot}/${agent}.md`).exists())) missing.push(agent)
+  const missingProfiles: string[] = []
+  for (const profile of Object.keys(config.profiles)) {
+    for (const base of profileAgentBases) {
+      const generated = profileAgentName(base, profile)
+      if (!(await Bun.file(`${agentRoot}/${generated}.md`).exists())) missingProfiles.push(generated)
+    }
+  }
   const opencodeConfigPath = `${opencodeRoot}/opencode.json`
   let mcpConfig: Record<string, unknown> = {}
   try {
@@ -1215,12 +1438,13 @@ async function doctor(): Promise<void> {
     mcpConfig = parsed?.mcp && typeof parsed.mcp === "object" ? parsed.mcp as Record<string, unknown> : {}
   } catch {}
   const mcpMissing = ["engram", "context7", "codegraph"].filter((name) => !mcpConfig[name])
-  let healthy = missing.length === 0 && mcpMissing.length === 0 && Boolean(Bun.which("opencode")) && Boolean(Bun.which("engram")) && Boolean(Bun.which("codegraph"))
+  let healthy = missing.length === 0 && missingProfiles.length === 0 && mcpMissing.length === 0 && Boolean(Bun.which("opencode")) && Boolean(Bun.which("engram")) && Boolean(Bun.which("codegraph"))
   console.log(`workflow-ai config: ${configPath} ${await Bun.file(configPath).exists() ? "present" : "not created (defaults active)"}`)
   console.log(`opencode: ${Bun.which("opencode") ? "available" : "MISSING"}`)
   console.log(`engram: ${Bun.which("engram") ? "available" : "MISSING"}`)
   console.log(`codegraph: ${Bun.which("codegraph") ? "available" : "MISSING"}`)
   console.log(`workflow agents: ${missing.length ? `missing ${missing.join(", ")}` : "all present"}`)
+  console.log(`profile agents: ${missingProfiles.length ? `missing ${missingProfiles.join(", ")}` : Object.keys(config.profiles).length ? `all present (${Object.keys(config.profiles).join(", ")})` : "none configured"}`)
   console.log(`MCP registrations: ${mcpMissing.length ? `missing ${mcpMissing.join(", ")}` : "engram, context7, codegraph"}`)
   console.log(`engram_url: ${config.engram_url}`)
   if (Bun.which("opencode")) {
@@ -1238,12 +1462,28 @@ async function doctor(): Promise<void> {
 }
 
 function usage(): void {
-  console.log(`workflow-ai — selectable Continuous Workflow\n\nCommands:\n  configure              Configure models, policies, and Engram endpoint\n  deps install           Install missing Engram, CodeGraph, and MCP registrations\n  deps update            Update pinned Engram and CodeGraph versions\n  deps status            Show dependency versions and Context7 registration\n  show                   Show the effective configuration\n  start [opencode args]  Start an interactive workflow-lead session\n  run [message..]        Run a non-interactive workflow-lead request\n  status <change-id>     Read persisted workflow status\n  resume <change-id>     Recover/continue a persisted workflow\n  complete <change-id>   Explicitly confirm and close a ready workflow\n  sync                   Reapply configured models to workflow-* agents\n  doctor                 Check installation and compatibility\n\nExamples:\n  workflow-ai configure\n  workflow-ai deps status\n  workflow-ai deps update\n  workflow-ai start --dir /path/to/project\n  workflow-ai run --dir /path/to/project "implement feature X"\n  workflow-ai status feature-x\n  workflow-ai complete feature-x`)
+  console.log(`workflow-ai — selectable Continuous Workflow\n\nCommands:\n  configure              Configure default models, policies, and permissions\n  configure --profile X  Configure an independent profile in the TUI\n  profile list           List default and independent profiles\n  profile create X       Clone the default profile into X\n  profile remove X       Remove X and only its generated agents\n  deps install           Install missing Engram, CodeGraph, and MCP registrations\n  deps update            Update pinned Engram and CodeGraph versions\n  deps status            Show dependency versions and Context7 registration\n  show                   Show the effective configuration\n  start [--profile X]    Start an interactive workflow Lead session\n  run [--profile X]      Run a non-interactive workflow Lead request\n  status <change-id>     Read persisted workflow status\n  resume <change-id>     Recover/continue a persisted workflow\n  complete <change-id>   Explicitly confirm and close a ready workflow\n  sync                   Reapply configured models to all workflow profiles\n  doctor                 Check installation and compatibility\n\nExamples:\n  workflow-ai configure\n  workflow-ai profile create deepseek\n  workflow-ai configure --profile deepseek\n  workflow-ai start --profile deepseek --dir /path/to/project\n  opencode --agent workflow-lead-deepseek\n  workflow-ai run --dir /path/to/project "implement feature X"\n  workflow-ai status feature-x\n  workflow-ai complete feature-x`)
+}
+
+function selectWorkflowAgent(args: string[]): { agent: string; args: string[] } {
+  const remaining = [...args]
+  const profileFlag = remaining.indexOf("--profile")
+  if (profileFlag < 0) return { agent: "workflow-lead", args: remaining }
+  const profile = remaining[profileFlag + 1]
+  if (!profile || !validProfileName(profile)) throw new Error("--profile requiere el nombre de un perfil existente")
+  remaining.splice(profileFlag, 2)
+  return { agent: profileAgentName("workflow-lead", profile), args: remaining }
 }
 
 async function main(): Promise<void> {
   const [command = "help", ...args] = process.argv.slice(2)
-  if (command === "configure") return configure()
+  if (command === "configure") {
+    const profileFlag = args.indexOf("--profile")
+    const profileName = profileFlag >= 0 ? args[profileFlag + 1] : "default"
+    if (profileFlag >= 0 && (!profileName || args.length !== 2)) throw new Error("configure --profile requiere solo el nombre del perfil")
+    return configure(profileName)
+  }
+  if (command === "profile" || command === "profiles") return profileCommand(args[0] ?? "list", args[1])
   if (command === "deps" || command === "dependencies") {
     const dependencyCommand = args[0] as "install" | "update" | "status" | undefined
     if (!dependencyCommand || !["install", "update", "status"].includes(dependencyCommand)) throw new Error("deps requiere install, update o status")
@@ -1259,22 +1499,31 @@ async function main(): Promise<void> {
     console.log(`Synchronized workflow models and Lead permissions from ${configPath}`)
     return
   }
-  if (command === "start") return runOpenCode(["--agent", "workflow-lead", ...args])
-  if (command === "run") return runOpenCode(["run", "--agent", "workflow-lead", ...args])
+  if (command === "start") {
+    const selected = selectWorkflowAgent(args)
+    return runOpenCode(["--agent", selected.agent, ...selected.args])
+  }
+  if (command === "run") {
+    const selected = selectWorkflowAgent(args)
+    return runOpenCode(["run", "--agent", selected.agent, ...selected.args])
+  }
   if (command === "status") {
     const change = args[0]
     if (!change) throw new Error("status requiere change-id")
-    return runOpenCode(["run", "--agent", "workflow-lead", "--command", "work-status", change])
+    const selected = selectWorkflowAgent(args.slice(1))
+    return runOpenCode(["run", "--agent", selected.agent, "--command", "work-status", change, ...selected.args])
   }
   if (command === "resume") {
     const change = args[0]
     if (!change) throw new Error("resume requiere change-id")
-    return runOpenCode(["run", "--agent", "workflow-lead", "--command", "work-resume", change])
+    const selected = selectWorkflowAgent(args.slice(1))
+    return runOpenCode(["run", "--agent", selected.agent, "--command", "work-resume", change, ...selected.args])
   }
   if (command === "complete" || command === "close") {
     const change = args[0]
     if (!change) throw new Error("complete requiere change-id")
-    return runOpenCode(["run", "--agent", "workflow-lead", "--command", "work-complete", change])
+    const selected = selectWorkflowAgent(args.slice(1))
+    return runOpenCode(["run", "--agent", selected.agent, "--command", "work-complete", change, ...selected.args])
   }
   usage()
 }

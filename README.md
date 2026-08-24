@@ -39,9 +39,50 @@ It also asks whether consultation and review are required or optional, and which
 
 You can run `workflow-ai configure` again whenever you want to change the model assigned to an area.
 
+### Perfiles independientes
+
+Si quieres tener otra combinación completa —por ejemplo, un Lead distinto cuando se acaba el uso de un proveedor— crea un perfil. El perfil normal no se toca:
+
+```bash
+workflow-ai profile create deepseek
+workflow-ai configure --profile deepseek
+```
+
+El segundo comando abre el mismo TUI, pero guarda los cambios dentro de `profiles.deepseek`. Ahí puedes asignar el Lead, cada área, el reviewer, sus niveles de pensamiento, las políticas y los permisos de ese perfil. No modifica los valores del perfil `default`.
+
+Al guardar se generan agentes globales independientes:
+
+```text
+workflow-lead-deepseek
+workflow-discovery-deepseek
+workflow-architecture-deepseek
+workflow-frontend-deepseek
+workflow-backend-deepseek
+workflow-security-deepseek
+workflow-reliability-deepseek
+workflow-reviewer-deepseek
+```
+
+Selecciona `workflow-lead-deepseek` en OpenCode, o lánzalo directamente:
+
+```bash
+opencode --agent workflow-lead-deepseek
+# alternativa equivalente:
+workflow-ai start --profile deepseek --dir /path/to/your-project
+```
+
+La selección cambia toda la familia del workflow, no solo el Lead: el Lead delega en los especialistas y reviewer del mismo sufijo. El estado, checkpoints, Engram, CodeGraph, Context7 y reglas de seguridad siguen siendo los mismos mecanismos globales. Para ver perfiles o retirar uno:
+
+```bash
+workflow-ai profile list
+workflow-ai profile remove deepseek
+```
+
+Retirar un perfil solo elimina su entrada de configuración y sus agentes generados; no toca el perfil normal ni archivos de tus proyectos.
+
 The configuration opens as a full-screen terminal interface. The left panel contains the Lead, specialist areas, Reviewer, policies, permissions, and the final review screen; the right panel shows the active item's description and current value. Use `↑`/`↓` to navigate and `Enter` to edit. In the model panel, type part of a provider or model name, such as `luna`, `deepseek`, `kimi`, or `minimax`, then use `↑`/`↓` to move through the filtered matches and `Enter` to choose. Press `Tab` for a model that is not listed. The thinking-level panel uses the same interaction and explains the active level. If the provider does not publish its variants, the workflow lets you enter the provider's variant name manually instead of hiding the setting. Nothing is written until you choose **Revisar y guardar** and confirm with `Enter`; `q` cancels the whole session. Engram's existing configured endpoint is retained automatically and is not requested in this wizard.
 
-The **Permisos** section controls only `workflow-lead`:
+The **Permisos** section controls the Lead of the profile currently being edited:
 
 - **Edición de archivos** — whether the Lead may edit without approval (`allow`), must ask (`ask`), or is blocked (`deny`).
 - **Comandos shell** — the same policy for Bash commands. `git reset --hard`, destructive clean, `rm -rf`, and `sudo` remain blocked by the workflow's hard safety rules.
@@ -50,7 +91,7 @@ The **Permisos** section controls only `workflow-lead`:
 - **Fuera del proyecto** — access to directories outside the project. The workflow state directory remains available so recovery continues to work.
 - **Preguntas interactivas** — whether the Lead may pause and present a question with options. Set this to `deny` for truly unattended runs.
 
-The defaults preserve normal interactive behavior: editing is automatic, shell and external-directory access ask, `git push` asks, approved subagents run automatically, and the Lead may ask questions. The settings are stored under `permissions` in `~/.config/opencode/continuous-workflow/config.json` and are synchronized only into the workflow Lead; they do not change global OpenCode permissions.
+The defaults preserve normal interactive behavior: editing is automatic, shell and external-directory access ask, `git push` asks, approved subagents run automatically, and the Lead may ask questions. The settings are stored under `permissions` for the default profile or under the selected entry in `profiles` in `~/.config/opencode/continuous-workflow/config.json`; they do not change global OpenCode permissions.
 
 ### 3. Open a project and select the Lead
 
@@ -173,7 +214,7 @@ The workflow-only settings live at:
 ~/.config/opencode/continuous-workflow/config.json
 ```
 
-This file contains the Lead model, area model map, reviewer model, consultation/review policies, and Engram endpoint. It is synchronized only into `workflow-*` agents.
+This file contains the default Lead model, area model map, reviewer model, consultation/review policies, Engram endpoint, and independent profile entries. It is synchronized only into generated `workflow-*` agents. A profile inherits the default when created, then becomes its own saved snapshot when configured.
 
 The thinking choices are stored beside those model assignments as `lead_variant`, `area_variants`, and `reviewer_variant`. A `default` value leaves the model's native OpenCode behavior unchanged; a named value is written as that agent's OpenCode `variant`.
 

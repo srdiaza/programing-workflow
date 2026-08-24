@@ -30,5 +30,6 @@
     "question": "allow",
     "task": "allow",
     "external_directory": "ask"
-  }
+  },
+  "profiles": {}
 }

@@ -10,7 +10,9 @@ workflow-ai doctor
 workflow-ai sync
 ```
 
-`doctor` checks OpenCode discovery, the state tool, Engram, CodeGraph, Context7, all area agents, and the MCP registrations. `sync` reapplies only model lines from the workflow configuration.
+`doctor` checks OpenCode discovery, the state tool, Engram, CodeGraph, Context7, all area agents, and the MCP registrations. `sync` reapplies model, variant, routing, and permission settings to the default agents and regenerates every configured profile family.
+
+Profiles are additive generated agents under the `workflow-*` namespace. An OpenCode upgrade does not own or overwrite them, but a full config reset can remove them. Re-run the repository installer; it preserves the configuration file and regenerates all profile agents from it. Repeated syncs are safe and do not accumulate profile suffixes.
 
 Use `workflow-ai deps install` to fill missing local runtimes and registrations, or `workflow-ai deps update` to update the pinned Engram and CodeGraph versions. Context7 is deliberately represented as a remote MCP URL; its service version is controlled by the provider, while this workflow installs and verifies the registration.
 

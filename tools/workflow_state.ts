@@ -12,6 +12,7 @@ import {
 import { spawn, spawnSync } from "node:child_process"
 
 const WORKFLOW_AGENT = "workflow-lead"
+const WORKFLOW_AGENT_PREFIX = "workflow-lead-"
 const WORKFLOW_SCHEMA = "continuous-workflow/v1"
 const DEFAULT_LEASE_MS = 30 * 60 * 1000
 const LOCK_WAIT_MS = 250
@@ -56,6 +57,8 @@ type WorkflowState = {
   acceptanceCriteria: string[]
   phase: Phase
   status: Status
+  /** Profile selected by the owning Lead; absent means the legacy default. */
+  profile?: string
   version: number
   owner: Owner
   nextAction: string
@@ -345,9 +348,17 @@ async function withChangeLock<T>(project: string, changeId: string, operation: (
 }
 
 function requireLead(agent: string, operation: string): void {
-  if (agent !== WORKFLOW_AGENT) {
-    throw new Error(`${operation} is reserved for ${WORKFLOW_AGENT}; current agent is ${agent}`)
+  if (!isLeadAgent(agent)) {
+    throw new Error(`${operation} is reserved for ${WORKFLOW_AGENT} or a selectable workflow-lead-* profile; current agent is ${agent}`)
   }
+}
+
+function isLeadAgent(agent: string): boolean {
+  return agent === WORKFLOW_AGENT || agent.startsWith(WORKFLOW_AGENT_PREFIX)
+}
+
+function profileFromAgent(agent: string): string {
+  return agent === WORKFLOW_AGENT ? "default" : agent.startsWith(WORKFLOW_AGENT_PREFIX) ? agent.slice(WORKFLOW_AGENT_PREFIX.length) || "default" : "default"
 }
 
 function requireExpected(state: WorkflowState, expected: number | undefined): void {
@@ -387,12 +398,12 @@ function event(
   const timestamp = now()
   const version = state.version + 1
   const history = [...state.history, { version, event: name, summary, actor: agent, sessionID, at: timestamp }].slice(-100)
-  const owner = { ...state.owner, lastSeenAt: timestamp, leaseUntil: new Date(Date.now() + DEFAULT_LEASE_MS).toISOString() }
-  return { ...state, version, updatedAt: timestamp, owner, history }
+  const owner = { ...state.owner, ...(isLeadAgent(agent) ? { agent } : {}), lastSeenAt: timestamp, leaseUntil: new Date(Date.now() + DEFAULT_LEASE_MS).toISOString() }
+  return { ...state, version, updatedAt: timestamp, owner, ...(isLeadAgent(agent) ? { profile: profileFromAgent(agent) } : {}), history }
 }
 
 function result(state: WorkflowState, message: string): { title: string; output: string; metadata: Record<string, unknown> } {
-  return { title: `workflow ${state.changeId} v${state.version}`, output: `${message}\n\n${JSON.stringify(state, null, 2)}`, metadata: { changeId: state.changeId, version: state.version, phase: state.phase, status: state.status } }
+  return { title: `workflow ${state.changeId} v${state.version}`, output: `${message}\n\n${JSON.stringify(state, null, 2)}`, metadata: { changeId: state.changeId, version: state.version, phase: state.phase, status: state.status, profile: state.profile ?? "default" } }
 }
 
 export default tool({
@@ -442,8 +453,9 @@ export default tool({
           acceptanceCriteria: (args.acceptance_criteria ?? []).map(asText).filter(Boolean),
           phase: "discovery",
           status: "active",
+          profile: profileFromAgent(context.agent),
           version: 1,
-          owner: { agent: WORKFLOW_AGENT, sessionID: context.sessionID, claimedAt: timestamp, lastSeenAt: timestamp, leaseUntil: new Date(Date.now() + DEFAULT_LEASE_MS).toISOString() },
+          owner: { agent: context.agent, sessionID: context.sessionID, claimedAt: timestamp, lastSeenAt: timestamp, leaseUntil: new Date(Date.now() + DEFAULT_LEASE_MS).toISOString() },
           nextAction: asText(args.next_action) || "Inspect the project and define the implementation boundary",
           updatedAt: timestamp,
           history: [{ version: 1, event: "started", summary: goalText, actor: context.agent, sessionID: context.sessionID, at: timestamp }],
@@ -465,7 +477,7 @@ export default tool({
           throw new Error(`workflow is still leased by session ${state.owner.sessionID}; use recover after the lease expires`)
         }
         state = event(state, operation === "recover" ? "recovered" : "claimed", summary || `${operation} by ${context.sessionID}`, context.agent, context.sessionID)
-        state.owner = { ...state.owner, agent: WORKFLOW_AGENT, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
+        state.owner = { ...state.owner, agent: context.agent, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
       } else if (operation === "consultation") {
         requireExpected(state, args.expected_version)
         const kind = args.consultation_kind ?? "consultation"
@@ -483,7 +495,7 @@ export default tool({
       } else if (operation === "reopen") {
         requireExpected(state, args.expected_version)
         if (state.status !== "ready") throw new Error(`only a ready workflow can be reopened (current status: ${state.status})`)
-        state.owner = { ...state.owner, agent: WORKFLOW_AGENT, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
+        state.owner = { ...state.owner, agent: context.agent, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
         state = event(state, "reopened", summary || "User requested another adjustment before completion", context.agent, context.sessionID)
         state.status = "active"
         state.phase = "verification"
@@ -492,7 +504,7 @@ export default tool({
         requireExpected(state, args.expected_version)
         if (operation === "complete" && state.status === "ready") {
           if (args.confirmation !== "explicit_user_confirmation") throw new Error("explicit user confirmation is required before completing this workflow")
-          state.owner = { ...state.owner, agent: WORKFLOW_AGENT, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
+          state.owner = { ...state.owner, agent: context.agent, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
         } else {
           ensureOwner(state, context.sessionID)
         }
