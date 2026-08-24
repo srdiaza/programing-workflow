@@ -1,5 +1,15 @@
 import { tool } from "@opencode-ai/plugin"
-import { readFileSync } from "node:fs"
+import {
+  accessSync,
+  constants as fsConstants,
+  mkdirSync,
+  readFileSync,
+  rmdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs"
+import { spawn, spawnSync } from "node:child_process"
 
 const WORKFLOW_AGENT = "workflow-lead"
 const WORKFLOW_SCHEMA = "continuous-workflow/v1"
@@ -71,6 +81,45 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
 }
 
+/**
+ * OpenCode executes tools in its own runtime and does not guarantee Bun's
+ * globals. Keep process discovery and filesystem operations on Node's
+ * standard APIs, which are available in the OpenCode plugin runtime.
+ */
+function commandSync(command: string, args: string[]): { exitCode: number; stdout: string; stderr: string } {
+  try {
+    const result = spawnSync(command, args, { stdio: ["ignore", "pipe", "pipe"] })
+    return {
+      exitCode: typeof result.status === "number" ? result.status : 1,
+      stdout: result.stdout?.toString() ?? "",
+      stderr: result.stderr?.toString() ?? "",
+    }
+  } catch (error) {
+    return { exitCode: 1, stdout: "", stderr: String(error) }
+  }
+}
+
+function executablePath(command: string): string | undefined {
+  if (command.includes("/")) {
+    try {
+      accessSync(command, fsConstants.X_OK)
+      return command
+    } catch {
+      return undefined
+    }
+  }
+
+  for (const directory of (process.env.PATH ?? "").split(":")) {
+    if (!directory) continue
+    const candidate = pathJoin(directory, command)
+    try {
+      accessSync(candidate, fsConstants.X_OK)
+      return candidate
+    } catch {}
+  }
+  return undefined
+}
+
 function safeChangeId(value: string): string {
   const changeId = value.trim()
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(changeId)) {
@@ -81,7 +130,7 @@ function safeChangeId(value: string): string {
 
 function projectFrom(directory: string): string {
   try {
-    const remote = Bun.spawnSync(["git", "-C", directory, "remote", "get-url", "origin"])
+    const remote = commandSync("git", ["-C", directory, "remote", "get-url", "origin"])
     if (remote.exitCode === 0) {
       const value = remote.stdout.toString().trim().replace(/\.git$/, "")
       const name = value.split(/[/:]/).pop()
@@ -90,7 +139,7 @@ function projectFrom(directory: string): string {
   } catch {}
 
   try {
-    const root = Bun.spawnSync(["git", "-C", directory, "rev-parse", "--show-toplevel"])
+    const root = commandSync("git", ["-C", directory, "rev-parse", "--show-toplevel"])
     if (root.exitCode === 0) {
       const value = root.stdout.toString().trim()
       const name = value.split("/").pop()
@@ -176,9 +225,11 @@ async function ensureEngram(): Promise<void> {
   } catch {}
 
   if (!engramIsLocal()) throw new Error(`Engram is not reachable at ${baseUrl}`)
-  const binary = process.env.ENGRAM_BIN ?? Bun.which("engram")
+  const binary = process.env.ENGRAM_BIN ?? executablePath("engram")
   if (!binary) throw new Error("Engram is not available; install it or set ENGRAM_BIN")
-  Bun.spawn([binary, "serve"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
+  const child = spawn(binary, ["serve"], { stdio: "ignore", detached: true })
+  child.on("error", () => {})
+  child.unref()
   for (let attempt = 0; attempt < 10; attempt += 1) {
     await sleep(150)
     try {
@@ -262,25 +313,30 @@ async function lockPath(project: string, changeId: string): Promise<string> {
 async function withChangeLock<T>(project: string, changeId: string, operation: () => Promise<T>): Promise<T> {
   const path = await lockPath(project, changeId)
   const lockRoot = pathJoin(stateRoot(), "locks")
-  Bun.spawnSync(["mkdir", "-p", lockRoot])
+  mkdirSync(lockRoot, { recursive: true })
 
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    const acquired = Bun.spawnSync(["mkdir", path]).exitCode === 0
+    let acquired = false
+    try {
+      mkdirSync(path)
+      acquired = true
+    } catch {}
+
     if (acquired) {
-      await Bun.write(pathJoin(path, "owner.json"), JSON.stringify({ at: now() }))
+      writeFileSync(pathJoin(path, "owner.json"), JSON.stringify({ at: now() }))
       try {
         return await operation()
       } finally {
-        Bun.spawnSync(["rm", "-f", pathJoin(path, "owner.json")])
-        Bun.spawnSync(["rmdir", path])
+        try { unlinkSync(pathJoin(path, "owner.json")) } catch {}
+        try { rmdirSync(path) } catch {}
       }
     }
 
-    const stat = Bun.spawnSync(["stat", "-c", "%Y", path])
-    const modifiedSeconds = Number.parseInt(stat.stdout.toString().trim(), 10)
-    if (Number.isFinite(modifiedSeconds) && Date.now() - modifiedSeconds * 1000 > LOCK_STALE_MS) {
-      Bun.spawnSync(["rm", "-f", pathJoin(path, "owner.json")])
-      Bun.spawnSync(["rmdir", path])
+    let modifiedMs = 0
+    try { modifiedMs = statSync(path).mtimeMs } catch {}
+    if (Number.isFinite(modifiedMs) && modifiedMs > 0 && Date.now() - modifiedMs > LOCK_STALE_MS) {
+      try { unlinkSync(pathJoin(path, "owner.json")) } catch {}
+      try { rmdirSync(path) } catch {}
       continue
     }
     await sleep(LOCK_WAIT_MS)
