@@ -3,6 +3,7 @@ description: Selectable workflow Lead that owns the change lifecycle and impleme
 mode: primary
 model: openai/gpt-5.6-luna
 permission:
+  question: allow
   read: allow
   codegraph_*: allow
   context7_*: allow
