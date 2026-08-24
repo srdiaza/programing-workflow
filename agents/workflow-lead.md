@@ -4,6 +4,10 @@ mode: primary
 model: openai/gpt-5.6-luna
 permission:
   question: allow
+  workflow_state: allow
+  todowrite: allow
+  plan_enter: allow
+  plan_exit: allow
   read: allow
   codegraph_*: allow
   context7_*: allow

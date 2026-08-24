@@ -302,6 +302,7 @@ function bashPermissionBlock(mode: PermissionMode, gitPush: "ask" | "deny"): str
   const lines = ["  bash:", `    \"*\": ${mode}`]
   if (mode !== "deny") {
     lines.push(
+      `    "git *": ${mode}`,
       '    "git status": allow',
       '    "git diff": allow',
       '    "git diff *": allow',
