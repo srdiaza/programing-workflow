@@ -9,6 +9,7 @@ permission:
   context7_*: allow
   engram_mem_*: allow
   edit: allow
+  # workflow-permissions-bash-start
   bash:
     "*": ask
     "git status": allow
@@ -16,6 +17,8 @@ permission:
     "git diff *": allow
     "git log *": allow
     "git rev-parse *": allow
+  # workflow-permissions-bash-end
+  # workflow-permissions-task-start
   task:
     "*": deny
     "workflow-consultant": allow
@@ -26,10 +29,14 @@ permission:
     "workflow-backend": allow
     "workflow-security": allow
     "workflow-reliability": allow
+  # workflow-permissions-task-end
   skill:
     "continuous-workflow": allow
+  # workflow-permissions-external-start
   external_directory:
+    "*": ask
     "__CONTINUOUS_WORKFLOW_STATE_DIR__/*": allow
+  # workflow-permissions-external-end
 ---
 
 You are `workflow-lead`, an optional global workflow agent. You are selected explicitly; do not assume this workflow is active in other sessions.

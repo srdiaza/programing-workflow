@@ -30,6 +30,9 @@ if [[ ! -e "${WORKFLOW_ROOT}/config.json" ]]; then
   cp "${ROOT_DIR}/config.default.json" "${WORKFLOW_ROOT}/config.json"
 fi
 cp "${ROOT_DIR}/COMPATIBILITY.md" "${WORKFLOW_ROOT}/"
+# Apply the existing workflow configuration to the freshly copied agents.
+# This keeps model and permission choices intact across reinstalls/upgrades.
+"${HOME}/.local/bin/workflow-ai" sync
 bash "${WORKFLOW_ROOT}/scripts/install-mcp.sh"
 
 echo "Continuous Workflow installed under ${OPENCODE_ROOT}"

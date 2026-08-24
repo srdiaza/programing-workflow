@@ -22,5 +22,12 @@
   "reviewer_variant": "default",
   "review_policy": "required",
   "consultation_policy": "on-demand",
-  "engram_url": "http://127.0.0.1:7437"
+  "engram_url": "http://127.0.0.1:7437",
+  "permissions": {
+    "edit": "allow",
+    "bash": "ask",
+    "question": "allow",
+    "task": "allow",
+    "external_directory": "ask"
+  }
 }

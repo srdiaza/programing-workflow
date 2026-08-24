@@ -35,11 +35,21 @@ It asks which model should be used for:
 
 For each assignment it also asks for the model's thinking level. OpenCode exposes the levels supported by that specific model, so the workflow does not pretend that every provider uses the same scale.
 
-It also asks whether consultation and review are required or optional. These choices apply only to the `workflow-*` agents. Your normal OpenCode configuration and default agent are left unchanged.
+It also asks whether consultation and review are required or optional, and which Lead permissions should run automatically. These choices apply only to the `workflow-*` agents. Your normal OpenCode configuration and default agent are left unchanged.
 
 You can run `workflow-ai configure` again whenever you want to change the model assigned to an area.
 
-The configuration opens as a full-screen terminal interface. The left panel contains the Lead, specialist areas, Reviewer, policies, and the final review screen; the right panel shows the active item's description and current value. Use `↑`/`↓` to navigate and `Enter` to edit. In the model panel, type part of a provider or model name, such as `luna`, `deepseek`, `kimi`, or `minimax`, then use `↑`/`↓` to move through the filtered matches and `Enter` to choose. Press `Tab` for a model that is not listed. The thinking-level panel uses the same interaction and explains the active level. If the provider does not publish its variants, the workflow lets you enter the provider's variant name manually instead of hiding the setting. Nothing is written until you choose **Revisar y guardar** and confirm with `Enter`; `q` cancels the whole session. Engram's existing configured endpoint is retained automatically and is not requested in this wizard.
+The configuration opens as a full-screen terminal interface. The left panel contains the Lead, specialist areas, Reviewer, policies, permissions, and the final review screen; the right panel shows the active item's description and current value. Use `↑`/`↓` to navigate and `Enter` to edit. In the model panel, type part of a provider or model name, such as `luna`, `deepseek`, `kimi`, or `minimax`, then use `↑`/`↓` to move through the filtered matches and `Enter` to choose. Press `Tab` for a model that is not listed. The thinking-level panel uses the same interaction and explains the active level. If the provider does not publish its variants, the workflow lets you enter the provider's variant name manually instead of hiding the setting. Nothing is written until you choose **Revisar y guardar** and confirm with `Enter`; `q` cancels the whole session. Engram's existing configured endpoint is retained automatically and is not requested in this wizard.
+
+The **Permisos** section controls only `workflow-lead`:
+
+- **Edición de archivos** — whether the Lead may edit without approval (`allow`), must ask (`ask`), or is blocked (`deny`).
+- **Comandos shell** — the same policy for Bash commands. `git push`, destructive reset/clean, `rm -rf`, and `sudo` remain blocked by the workflow's hard safety rules.
+- **Subagentes** — whether the approved `workflow-*` consultants and reviewer run automatically, ask first, or are disabled.
+- **Fuera del proyecto** — access to directories outside the project. The workflow state directory remains available so recovery continues to work.
+- **Preguntas interactivas** — whether the Lead may pause and present a question with options. Set this to `deny` for truly unattended runs.
+
+The defaults preserve normal interactive behavior: editing is automatic, shell and external-directory access ask, approved subagents run automatically, and the Lead may ask questions. The settings are stored under `permissions` in `~/.config/opencode/continuous-workflow/config.json` and are synchronized only into the workflow Lead; they do not change global OpenCode permissions.
 
 ### 3. Open a project and select the Lead
 
@@ -165,6 +175,12 @@ The workflow-only settings live at:
 This file contains the Lead model, area model map, reviewer model, consultation/review policies, and Engram endpoint. It is synchronized only into `workflow-*` agents.
 
 The thinking choices are stored beside those model assignments as `lead_variant`, `area_variants`, and `reviewer_variant`. A `default` value leaves the model's native OpenCode behavior unchanged; a named value is written as that agent's OpenCode `variant`.
+
+To apply a hand-edited configuration without changing models, run:
+
+```bash
+workflow-ai sync
+```
 
 ## Project setup and recovery
 

@@ -6,6 +6,15 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 
 type AreaName = "discovery" | "architecture" | "frontend" | "backend" | "security" | "reliability"
+type PermissionMode = "allow" | "ask" | "deny"
+
+type WorkflowPermissions = {
+  edit: PermissionMode
+  bash: PermissionMode
+  question: "allow" | "deny"
+  task: PermissionMode
+  external_directory: PermissionMode
+}
 
 type WorkflowConfig = {
   schema: "continuous-workflow/config/v1"
@@ -18,6 +27,7 @@ type WorkflowConfig = {
   review_policy: "required" | "optional" | "disabled"
   consultation_policy: "always" | "on-demand"
   engram_url: string
+  permissions: WorkflowPermissions
 }
 
 type ModelAssignment = {
@@ -38,6 +48,7 @@ const opencodeRoot = process.env.OPENCODE_CONFIG_ROOT || `${home}/.config/openco
 const configPath = process.env.CONTINUOUS_WORKFLOW_CONFIG || `${opencodeRoot}/continuous-workflow/config.json`
 const agentRoot = `${opencodeRoot}/agents`
 const workflowRoot = `${opencodeRoot}/continuous-workflow`
+const workflowStateDirectory = process.env.CONTINUOUS_WORKFLOW_STATE_DIR || `${home}/.local/share/opencode/continuous-workflow`
 
 const defaults: WorkflowConfig = {
   schema: "continuous-workflow/config/v1",
@@ -64,6 +75,13 @@ const defaults: WorkflowConfig = {
   review_policy: "required",
   consultation_policy: "on-demand",
   engram_url: "http://127.0.0.1:7437",
+  permissions: {
+    edit: "allow",
+    bash: "ask",
+    question: "allow",
+    task: "allow",
+    external_directory: "ask",
+  },
 }
 
 const agentModels: Record<string, string> = {
@@ -91,11 +109,21 @@ const agentVariants: Record<string, string> = {
 }
 
 function mergeConfig(value: Partial<WorkflowConfig> | undefined): WorkflowConfig {
+  const configuredPermissions = value?.permissions as Partial<WorkflowPermissions> | undefined
+  const permission = (candidate: unknown, fallback: PermissionMode): PermissionMode => candidate === "allow" || candidate === "ask" || candidate === "deny" ? candidate : fallback
+  const questionPermission = configuredPermissions?.question === "deny" ? "deny" : "allow"
   return {
     ...defaults,
     ...(value ?? {}),
     areas: { ...defaults.areas, ...(value?.areas ?? {}) },
     area_variants: { ...defaults.area_variants, ...(value?.area_variants ?? {}) },
+    permissions: {
+      edit: permission(configuredPermissions?.edit, defaults.permissions.edit),
+      bash: permission(configuredPermissions?.bash, defaults.permissions.bash),
+      question: questionPermission,
+      task: permission(configuredPermissions?.task, defaults.permissions.task),
+      external_directory: permission(configuredPermissions?.external_directory, defaults.permissions.external_directory),
+    },
   }
 }
 
@@ -152,6 +180,73 @@ async function syncAgentModels(config: WorkflowConfig): Promise<void> {
     }
     if (updated !== current) await Bun.write(filePath, updated)
   }
+}
+
+const workflowSubagents = [
+  "workflow-consultant",
+  "workflow-reviewer",
+  "workflow-discovery",
+  "workflow-architecture",
+  "workflow-frontend",
+  "workflow-backend",
+  "workflow-security",
+  "workflow-reliability",
+]
+
+function markedBlock(content: string, start: string, end: string, replacement: string): string {
+  const pattern = new RegExp(`(^\\s*# ${start}\\r?\\n)[\\s\\S]*?(^\\s*# ${end}\\s*$)`, "m")
+  if (!pattern.test(content)) throw new Error(`workflow-lead is missing permission markers: ${start}/${end}`)
+  return content.replace(pattern, `$1${replacement}\n$2`)
+}
+
+function bashPermissionBlock(mode: PermissionMode): string {
+  const lines = ["  bash:", `    \"*\": ${mode}`]
+  if (mode !== "deny") {
+    lines.push(
+      '    "git status": allow',
+      '    "git diff": allow',
+      '    "git diff *": allow',
+      '    "git log *": allow',
+      '    "git rev-parse *": allow',
+    )
+  }
+  lines.push(
+    '    "git push*": deny',
+    '    "git reset --hard*": deny',
+    '    "git clean -fd*": deny',
+    '    "rm -rf*": deny',
+    '    "sudo *": deny',
+  )
+  return lines.join("\n")
+}
+
+function taskPermissionBlock(mode: PermissionMode): string {
+  return [
+    "  task:",
+    '    "*": deny',
+    ...workflowSubagents.map((agent) => `    "${agent}": ${mode}`),
+  ].join("\n")
+}
+
+async function syncAgentPermissions(config: WorkflowConfig): Promise<void> {
+  const filePath = `${agentRoot}/workflow-lead.md`
+  const file = Bun.file(filePath)
+  if (!(await file.exists())) {
+    console.error(`warning: agent file not found, skipped: ${filePath}`)
+    return
+  }
+  const permissions = config.permissions
+  let current = await file.text()
+  current = current.replace(/^  question:\s*.*$/m, `  question: ${permissions.question}`)
+  current = current.replace(/^  edit:\s*.*$/m, `  edit: ${permissions.edit}`)
+  current = markedBlock(current, "workflow-permissions-bash-start", "workflow-permissions-bash-end", bashPermissionBlock(permissions.bash))
+  current = markedBlock(current, "workflow-permissions-task-start", "workflow-permissions-task-end", taskPermissionBlock(permissions.task))
+  current = markedBlock(current, "workflow-permissions-external-start", "workflow-permissions-external-end", [
+    "  external_directory:",
+    `    \"*\": ${permissions.external_directory}`,
+    `    "${workflowStateDirectory}/*": allow`,
+  ].join("\n"))
+  if (current !== await file.text()) await Bun.write(filePath, current)
 }
 
 function validModel(value: string): boolean {
@@ -550,7 +645,7 @@ async function askChoice<T extends string>(rl: ReturnType<typeof createInterface
   }
 }
 
-type TuiMode = "main" | "model" | "variant" | "manual-model" | "manual-variant" | "policies" | "review"
+type TuiMode = "main" | "model" | "variant" | "manual-model" | "manual-variant" | "policies" | "permissions" | "review"
 type TuiKey = "up" | "down" | "left" | "right" | "enter" | "tab" | "backspace" | "escape" | { kind: "char"; value: string } | "cancel"
 
 type TuiState = {
@@ -569,6 +664,9 @@ type TuiState = {
   policyCursor: number
   policyEditing: boolean
   policyChoice: number
+  permissionCursor: number
+  permissionEditing: boolean
+  permissionChoice: number
   status: string
 }
 
@@ -584,6 +682,14 @@ const tuiGreen = (value: string) => `${tuiEscape}32m${value}${tuiReset}`
 const tuiPolicyItems = [
   { key: "review_policy", label: "Revisión", choices: ["required", "optional", "disabled"] as const },
   { key: "consultation_policy", label: "Consultores", choices: ["always", "on-demand"] as const },
+]
+
+const tuiPermissionItems = [
+  { key: "edit", label: "Edición de archivos", description: "Permite que el Lead escriba, modifique y aplique parches.", choices: ["allow", "ask", "deny"] as const },
+  { key: "bash", label: "Comandos shell", description: "Controla los comandos Bash; push, reset destructivo y sudo permanecen bloqueados.", choices: ["allow", "ask", "deny"] as const },
+  { key: "task", label: "Subagentes", description: "Controla el lanzamiento de los consultores workflow-* permitidos.", choices: ["allow", "ask", "deny"] as const },
+  { key: "external_directory", label: "Fuera del proyecto", description: "Permite acceder a rutas externas; el directorio de estado del workflow siempre se conserva.", choices: ["allow", "ask", "deny"] as const },
+  { key: "question", label: "Preguntas interactivas", description: "Permite que el Lead pause y solicite una decisión con opciones.", choices: ["allow", "deny"] as const },
 ]
 
 function tuiInteractive(): boolean {
@@ -668,6 +774,16 @@ function tuiSetPolicy(state: TuiState, value: string): void {
   else state.config.consultation_policy = value as WorkflowConfig["consultation_policy"]
 }
 
+function tuiCurrentPermission(state: TuiState): string {
+  const item = tuiPermissionItems[state.permissionCursor]
+  return state.config.permissions[item.key as keyof WorkflowPermissions]
+}
+
+function tuiSetPermission(state: TuiState, value: string): void {
+  const item = tuiPermissionItems[state.permissionCursor]
+  state.config.permissions[item.key as keyof WorkflowPermissions] = value as never
+}
+
 function tuiParseKeys(raw: string): TuiKey[] {
   const keys: TuiKey[] = []
   let data = raw
@@ -695,9 +811,13 @@ function tuiHeader(state: TuiState): string {
 
 function tuiLeftLines(state: TuiState): string[] {
   const lines = [tuiBold("SECCIONES"), ""]
-  const labels = [...tuiAssignments().map((assignment) => assignment.label), "Políticas", "Revisar y guardar"]
+  const assignmentCount = tuiAssignments().length
+  const policyIndex = assignmentCount
+  const permissionIndex = assignmentCount + 1
+  const reviewIndex = assignmentCount + 2
+  const labels = [...tuiAssignments().map((assignment) => assignment.label), "Políticas", "Permisos", "Revisar y guardar"]
   for (let index = 0; index < labels.length; index += 1) {
-    const active = state.mode === "policies" ? index === tuiAssignments().length : state.mode === "review" ? index === tuiAssignments().length + 1 : state.selected === index
+    const active = state.mode === "policies" ? index === policyIndex : state.mode === "permissions" ? index === permissionIndex : state.mode === "review" ? index === reviewIndex : state.selected === index
     lines.push(active ? tuiBlue(`  ▸ ${labels[index]}`) : `    ${labels[index]}`)
   }
   lines.push("", tuiDim("Configuración independiente"), tuiDim("No modifica el agente normal"))
@@ -769,6 +889,21 @@ function tuiPolicyDetails(state: TuiState): string[] {
   return lines
 }
 
+function tuiPermissionDetails(state: TuiState, width: number): string[] {
+  const lines = [tuiBold("Permisos automáticos del Lead"), "", tuiDim("Estos valores solo se aplican a workflow-lead."), ""]
+  tuiPermissionItems.forEach((item, index) => {
+    const current = tuiCurrentPermission({ ...state, permissionCursor: index })
+    const active = index === state.permissionCursor
+    lines.push(active ? tuiBlue(`  ▸ ${item.label}: ${current}`) : `    ${item.label}: ${current}`)
+    if (active) lines.push(...tuiWrap(item.description, width - 2).map((line) => `      ${tuiDim(line)}`))
+    if (active && state.permissionEditing) {
+      for (const [choiceIndex, choice] of item.choices.entries()) lines.push(choiceIndex === state.permissionChoice ? `      ${tuiCyan("●")} ${choice}` : `      ○ ${choice}`)
+    }
+  })
+  lines.push("", tuiDim(state.permissionEditing ? "↑↓ elegir · Enter confirmar · Esc cancelar" : "↑↓ mover · Enter editar · Esc volver"))
+  return lines
+}
+
 function tuiReviewDetails(state: TuiState, width: number): string[] {
   const lines = [tuiBold("Revisar configuración"), "", tuiDim("Nada se guarda hasta confirmar aquí."), ""]
   for (const assignment of tuiAssignments()) {
@@ -776,7 +911,18 @@ function tuiReviewDetails(state: TuiState, width: number): string[] {
     const variant = variantValue(state.config, assignment.variantPath)
     lines.push(`${tuiCyan(assignment.label.padEnd(13))} ${model}  ·  ${variant}`)
   }
-  lines.push("", `${tuiCyan("Revisión")}      ${state.config.review_policy}`, `${tuiCyan("Consultores")}   ${state.config.consultation_policy}`, "", tuiGreen("Enter guardar"), tuiDim("Esc volver · q cancelar"))
+  lines.push(
+    "",
+    `${tuiCyan("Revisión")}      ${state.config.review_policy}`,
+    `${tuiCyan("Consultores")}   ${state.config.consultation_policy}`,
+    `${tuiCyan("Edición")}      ${state.config.permissions.edit}`,
+    `${tuiCyan("Shell")}        ${state.config.permissions.bash}`,
+    `${tuiCyan("Subagentes")}   ${state.config.permissions.task}`,
+    `${tuiCyan("Externos")}     ${state.config.permissions.external_directory}`,
+    `${tuiCyan("Preguntas")}    ${state.config.permissions.question}`,
+    "",
+    tuiGreen("Enter guardar"), tuiDim("Esc volver · q cancelar"),
+  )
   return lines
 }
 
@@ -801,8 +947,10 @@ function tuiRender(state: TuiState): void {
           ? tuiManualDetails(state, "Variante manual", "Escribe el nombre que acepta tu proveedor; por ejemplo thinking")
           : state.mode === "policies"
             ? tuiPolicyDetails(state)
-            : state.mode === "review"
-              ? tuiReviewDetails(state, rightWidth)
+            : state.mode === "permissions"
+              ? tuiPermissionDetails(state, rightWidth)
+              : state.mode === "review"
+                ? tuiReviewDetails(state, rightWidth)
               : state.selected < tuiAssignments().length
                 ? tuiAssignmentDetails(state, tuiAssignments()[state.selected], rightWidth)
                 : [tuiBold("Selecciona una sección"), "", tuiDim("Usa ↑↓ para moverte y Enter para abrirla.")]
@@ -837,12 +985,14 @@ function tuiCommitPending(state: TuiState): void {
 function tuiHandleKey(state: TuiState, key: TuiKey): "save" | "cancel" | null {
   if (key === "cancel") return "cancel"
   if (state.mode === "main") {
-    if (key === "up") state.selected = (state.selected + tuiAssignments().length + 1) % (tuiAssignments().length + 2)
-    else if (key === "down" || key === "tab") state.selected = (state.selected + 1) % (tuiAssignments().length + 2)
+    const sectionCount = tuiAssignments().length + 3
+    if (key === "up") state.selected = (state.selected + sectionCount - 1) % sectionCount
+    else if (key === "down" || key === "tab") state.selected = (state.selected + 1) % sectionCount
     else if (key === "escape") return "cancel"
     else if (key === "enter") {
       if (state.selected < tuiAssignments().length) tuiStartEditing(state)
       else if (state.selected === tuiAssignments().length) { state.mode = "policies"; state.policyCursor = 0 }
+      else if (state.selected === tuiAssignments().length + 1) { state.mode = "permissions"; state.permissionCursor = 0 }
       else state.mode = "review"
     } else if (typeof key === "object" && key.kind === "char" && key.value.toLowerCase() === "s") state.mode = "review"
     else if (typeof key === "object" && key.kind === "char" && key.value.toLowerCase() === "q") return "cancel"
@@ -912,6 +1062,19 @@ function tuiHandleKey(state: TuiState, key: TuiKey): "save" | "cancel" | null {
     else if (key === "escape") state.mode = "main"
     return null
   }
+  if (state.mode === "permissions") {
+    const item = tuiPermissionItems[state.permissionCursor]
+    if (state.permissionEditing) {
+      if (key === "up" || key === "left") state.permissionChoice = (state.permissionChoice + item.choices.length - 1) % item.choices.length
+      else if (key === "down" || key === "right") state.permissionChoice = (state.permissionChoice + 1) % item.choices.length
+      else if (key === "enter") { tuiSetPermission(state, item.choices[state.permissionChoice]); state.permissionEditing = false; state.status = `${item.label} actualizado.` }
+      else if (key === "escape") state.permissionEditing = false
+    } else if (key === "up") state.permissionCursor = (state.permissionCursor + tuiPermissionItems.length - 1) % tuiPermissionItems.length
+    else if (key === "down") state.permissionCursor = (state.permissionCursor + 1) % tuiPermissionItems.length
+    else if (key === "enter") { state.permissionChoice = item.choices.indexOf(tuiCurrentPermission(state) as never); state.permissionEditing = true }
+    else if (key === "escape") state.mode = "main"
+    return null
+  }
   if (state.mode === "review") {
     if (key === "enter" || (typeof key === "object" && key.kind === "char" && key.value.toLowerCase() === "s")) return "save"
     if (key === "escape") state.mode = "main"
@@ -926,6 +1089,7 @@ async function runConfigureTui(config: WorkflowConfig, models: ModelOption[]): P
     mode: "main", config: tuiClone(config), original: tuiClone(config), models, selected: 0,
     modelQuery: "", modelCursor: 0, variantCursor: 0, pendingModel: "", pendingOption: null,
     pendingVariant: "default", manualInput: "", policyCursor: 0, policyEditing: false, policyChoice: 0,
+    permissionCursor: 0, permissionEditing: false, permissionChoice: 0,
     status: "Los cambios se aplican solo después de Guardar.",
   }
   input.setRawMode(true)
@@ -967,8 +1131,9 @@ async function configure(): Promise<void> {
   Bun.spawnSync(["mkdir", "-p", `${opencodeRoot}/continuous-workflow`])
   await saveConfig(finalConfig)
   await syncAgentModels(finalConfig)
+  await syncAgentPermissions(finalConfig)
   console.log(`\nConfiguración guardada en ${configPath}`)
-  console.log("Los modelos de los agentes workflow-* fueron sincronizados.")
+  console.log("Los modelos y permisos del workflow-lead fueron sincronizados.")
 }
 
 async function showConfig(): Promise<void> {
@@ -1083,8 +1248,10 @@ async function main(): Promise<void> {
   if (command === "doctor") return doctor()
   if (command === "sync") {
     const config = (await loadConfig()) ?? defaults
+    await saveConfig(config)
     await syncAgentModels(config)
-    console.log(`Synchronized workflow agent models from ${configPath}`)
+    await syncAgentPermissions(config)
+    console.log(`Synchronized workflow models and Lead permissions from ${configPath}`)
     return
   }
   if (command === "start") return runOpenCode(["--agent", "workflow-lead", ...args])
