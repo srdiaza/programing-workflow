@@ -550,52 +550,423 @@ async function askChoice<T extends string>(rl: ReturnType<typeof createInterface
   }
 }
 
+type TuiMode = "main" | "model" | "variant" | "manual-model" | "manual-variant" | "policies" | "review"
+type TuiKey = "up" | "down" | "left" | "right" | "enter" | "tab" | "backspace" | "escape" | { kind: "char"; value: string } | "cancel"
+
+type TuiState = {
+  mode: TuiMode
+  config: WorkflowConfig
+  original: WorkflowConfig
+  models: ModelOption[]
+  selected: number
+  modelQuery: string
+  modelCursor: number
+  variantCursor: number
+  pendingModel: string
+  pendingOption: ModelOption | null
+  pendingVariant: string
+  manualInput: string
+  policyCursor: number
+  policyEditing: boolean
+  policyChoice: number
+  status: string
+}
+
+const tuiEscape = "\x1b["
+const tuiReset = "\x1b[0m"
+const tuiCyan = (value: string) => `${tuiEscape}36m${value}${tuiReset}`
+const tuiBlue = (value: string) => `${tuiEscape}44;97m${value}${tuiReset}`
+const tuiBold = (value: string) => `${tuiEscape}1m${value}${tuiReset}`
+const tuiDim = (value: string) => `${tuiEscape}2m${value}${tuiReset}`
+const tuiYellow = (value: string) => `${tuiEscape}33m${value}${tuiReset}`
+const tuiGreen = (value: string) => `${tuiEscape}32m${value}${tuiReset}`
+
+const tuiPolicyItems = [
+  { key: "review_policy", label: "Revisión", choices: ["required", "optional", "disabled"] as const },
+  { key: "consultation_policy", label: "Consultores", choices: ["always", "on-demand"] as const },
+]
+
+function tuiInteractive(): boolean {
+  return Boolean(input.isTTY && output.isTTY && typeof input.setRawMode === "function")
+}
+
+function tuiPlain(value: string): string {
+  return value.replace(/\x1b\[[0-9;]*m/g, "")
+}
+
+function tuiFit(value: string, width: number): string {
+  const plain = tuiPlain(value)
+  if (plain.length > width) return `${plain.slice(0, Math.max(0, width - 1))}…`.padEnd(width)
+  return value + " ".repeat(Math.max(0, width - plain.length))
+}
+
+function tuiWrap(value: string, width: number): string[] {
+  const words = value.split(/\s+/)
+  const lines: string[] = []
+  let line = ""
+  for (const word of words) {
+    if (!word) continue
+    if (line && line.length + word.length + 1 > width) {
+      lines.push(line)
+      line = word
+    } else {
+      line = line ? `${line} ${word}` : word
+    }
+  }
+  if (line) lines.push(line)
+  return lines
+}
+
+function tuiClone(config: WorkflowConfig): WorkflowConfig {
+  return JSON.parse(JSON.stringify(config)) as WorkflowConfig
+}
+
+function tuiDirty(state: TuiState): boolean {
+  return JSON.stringify(state.config) !== JSON.stringify(state.original)
+}
+
+function tuiAssignments(): ModelAssignment[] {
+  return modelAssignments
+}
+
+function tuiSetModel(config: WorkflowConfig, path: string, value: string): void {
+  if (path === "lead_model") config.lead_model = value
+  else if (path === "reviewer_model") config.reviewer_model = value
+  else config.areas[path.split(".")[1] as AreaName] = value
+}
+
+function tuiSetVariant(config: WorkflowConfig, path: string, value: string): void {
+  if (path === "lead_variant") config.lead_variant = value
+  else if (path === "reviewer_variant") config.reviewer_variant = value
+  else config.area_variants[path.split(".")[1] as AreaName] = value
+}
+
+function tuiModelMatches(state: TuiState): ModelOption[] {
+  const query = state.modelQuery.toLowerCase()
+  return state.models.filter((model) => !query || model.id.toLowerCase().includes(query))
+}
+
+function tuiVariantChoices(state: TuiState): string[] {
+  const option = state.pendingOption
+  if (!option) return ["default"]
+  const choices = ["default", ...option.variants.filter((variant) => variant !== "default")]
+  if (!option.variantsKnown) {
+    if (state.pendingVariant !== "default" && !choices.includes(state.pendingVariant)) choices.push(state.pendingVariant)
+    choices.push("custom…")
+  }
+  return [...new Set(choices)]
+}
+
+function tuiCurrentPolicy(state: TuiState): string {
+  const item = tuiPolicyItems[state.policyCursor]
+  return item.key === "review_policy" ? state.config.review_policy : state.config.consultation_policy
+}
+
+function tuiSetPolicy(state: TuiState, value: string): void {
+  const item = tuiPolicyItems[state.policyCursor]
+  if (item.key === "review_policy") state.config.review_policy = value as WorkflowConfig["review_policy"]
+  else state.config.consultation_policy = value as WorkflowConfig["consultation_policy"]
+}
+
+function tuiParseKeys(raw: string): TuiKey[] {
+  const keys: TuiKey[] = []
+  let data = raw
+  while (data.length) {
+    if (data.startsWith("\x1b[A")) { keys.push("up"); data = data.slice(3); continue }
+    if (data.startsWith("\x1b[B")) { keys.push("down"); data = data.slice(3); continue }
+    if (data.startsWith("\x1b[C")) { keys.push("right"); data = data.slice(3); continue }
+    if (data.startsWith("\x1b[D")) { keys.push("left"); data = data.slice(3); continue }
+    const char = data[0]
+    data = data.slice(1)
+    if (char === "\u0003") keys.push("cancel")
+    else if (char === "\r" || char === "\n") keys.push("enter")
+    else if (char === "\t") keys.push("tab")
+    else if (char === "\u007f" || char === "\b") keys.push("backspace")
+    else if (char === "\x1b") keys.push("escape")
+    else keys.push({ kind: "char", value: char })
+  }
+  return keys
+}
+
+function tuiHeader(state: TuiState): string {
+  const dirty = tuiDirty(state) ? tuiYellow(" • CAMBIOS SIN GUARDAR") : tuiDim(" • sin cambios")
+  return `${tuiBold("PROGRAMING WORKFLOW")}  ${tuiCyan("Configuración")}${dirty}`
+}
+
+function tuiLeftLines(state: TuiState): string[] {
+  const lines = [tuiBold("SECCIONES"), ""]
+  const labels = [...tuiAssignments().map((assignment) => assignment.label), "Políticas", "Revisar y guardar"]
+  for (let index = 0; index < labels.length; index += 1) {
+    const active = state.mode === "policies" ? index === tuiAssignments().length : state.mode === "review" ? index === tuiAssignments().length + 1 : state.selected === index
+    lines.push(active ? tuiBlue(`  ▸ ${labels[index]}`) : `    ${labels[index]}`)
+  }
+  lines.push("", tuiDim("Configuración independiente"), tuiDim("No modifica el agente normal"))
+  return lines
+}
+
+function tuiAssignmentDetails(state: TuiState, assignment: ModelAssignment, width: number): string[] {
+  const model = modelValue(state.config, assignment.path)
+  const variant = variantValue(state.config, assignment.variantPath)
+  const lines = [tuiBold(assignment.label), ""]
+  lines.push(...tuiWrap(assignment.description, width), "")
+  lines.push(`${tuiCyan("Modelo")}      ${model}`)
+  lines.push(`${tuiCyan("Pensamiento")} ${variant === "default" ? "predeterminado" : variant}`)
+  lines.push("", tuiDim("Enter editar modelo · ↑↓ cambiar sección"))
+  return lines
+}
+
+function tuiModelDetails(state: TuiState, width: number, height: number): string[] {
+  const assignment = tuiAssignments()[state.selected]
+  const matches = tuiModelMatches(state)
+  const lines = [tuiBold(`Modelo para ${assignment.label}`), "", `${tuiCyan("Buscar")} ${state.modelQuery || tuiDim("escribe para filtrar")}`, ""]
+  if (!matches.length) {
+    lines.push(tuiYellow("No hay coincidencias."), "", "Tab abre el modelo manual.")
+    return lines
+  }
+  const visible = Math.max(4, height - 8)
+  const start = Math.max(0, Math.min(state.modelCursor - Math.floor(visible / 2), matches.length - visible))
+  for (const [offset, model] of matches.slice(start, start + visible).entries()) {
+    const index = start + offset
+    const active = index === state.modelCursor
+    const detail = !model.variantsKnown ? "variantes no consultadas" : model.variants.length ? `pensamiento: ${model.variants.join(", ")}` : "sin niveles declarados"
+    lines.push(active ? tuiBlue(`  ▸ ${model.id}`) : `    ${model.id}`)
+    lines.push(active ? `      ${tuiDim(detail)}` : `      ${tuiDim(detail)}`)
+  }
+  lines.push("", tuiDim("↑↓ mover · Enter seleccionar · Tab modelo manual · Esc volver"))
+  return lines
+}
+
+function tuiVariantDetails(state: TuiState, width: number): string[] {
+  const assignment = tuiAssignments()[state.selected]
+  const option = state.pendingOption
+  const choices = tuiVariantChoices(state)
+  const lines = [tuiBold(`Pensamiento para ${assignment.label}`), "", `Modelo: ${state.pendingModel}`, ""]
+  if (option && !option.variantsKnown) lines.push(tuiYellow("El proveedor no publicó sus variantes. Puedes definir una manualmente."), "")
+  for (const [index, choice] of choices.entries()) {
+    const active = index === state.variantCursor
+    const description = choice === "custom…" ? "Escribir una variante del proveedor" : describeThinkingLevel(choice)
+    lines.push(active ? tuiBlue(`  ▸ ${choice}`) : `    ${choice}`, `      ${tuiDim(description)}`)
+  }
+  lines.push("", tuiDim("↑↓ mover · Enter seleccionar · c variante manual · Esc volver"))
+  return lines
+}
+
+function tuiManualDetails(state: TuiState, title: string, help: string): string[] {
+  return [tuiBold(title), "", tuiCyan("Entrada"), `${state.manualInput}▌`, "", tuiDim(help), "", tuiDim("Enter aceptar · Esc cancelar")]
+}
+
+function tuiPolicyDetails(state: TuiState): string[] {
+  const lines = [tuiBold("Políticas del workflow"), "", "Engram", "  automático · se conserva la URL configurada", ""]
+  tuiPolicyItems.forEach((item, index) => {
+    const current = tuiCurrentPolicy({ ...state, policyCursor: index })
+    const active = index === state.policyCursor
+    lines.push(active ? tuiBlue(`  ▸ ${item.label}: ${current}`) : `    ${item.label}: ${current}`)
+    if (active && state.policyEditing) {
+      for (const [choiceIndex, choice] of item.choices.entries()) lines.push(choiceIndex === state.policyChoice ? `      ${tuiCyan("●")} ${choice}` : `      ○ ${choice}`)
+    }
+  })
+  lines.push("", tuiDim(state.policyEditing ? "↑↓ elegir · Enter confirmar · Esc cancelar" : "↑↓ mover · Enter editar · Esc volver"))
+  return lines
+}
+
+function tuiReviewDetails(state: TuiState, width: number): string[] {
+  const lines = [tuiBold("Revisar configuración"), "", tuiDim("Nada se guarda hasta confirmar aquí."), ""]
+  for (const assignment of tuiAssignments()) {
+    const model = modelValue(state.config, assignment.path)
+    const variant = variantValue(state.config, assignment.variantPath)
+    lines.push(`${tuiCyan(assignment.label.padEnd(13))} ${model}  ·  ${variant}`)
+  }
+  lines.push("", `${tuiCyan("Revisión")}      ${state.config.review_policy}`, `${tuiCyan("Consultores")}   ${state.config.consultation_policy}`, "", tuiGreen("Enter guardar"), tuiDim("Esc volver · q cancelar"))
+  return lines
+}
+
+function tuiRender(state: TuiState): void {
+  const columns = Number(output.columns) || 100
+  const rows = Number(output.rows) || 30
+  const width = Math.max(70, Math.min(columns, 128))
+  const height = Math.max(22, Math.min(rows, 48))
+  const leftWidth = Math.min(30, Math.floor(width * 0.29))
+  const rightWidth = width - leftWidth - 3
+  const bodyHeight = height - 7
+  const top = `╭${"─".repeat(width - 2)}╮`
+  const divider = `├${"─".repeat(leftWidth)}┬${"─".repeat(rightWidth)}┤`
+  const bottom = `╰${"─".repeat(leftWidth)}┴${"─".repeat(rightWidth)}╯`
+  const right = state.mode === "model"
+    ? tuiModelDetails(state, rightWidth, bodyHeight)
+    : state.mode === "variant"
+      ? tuiVariantDetails(state, rightWidth)
+      : state.mode === "manual-model"
+        ? tuiManualDetails(state, "Modelo manual", "Usa provider/model; por ejemplo openai/gpt-5.6-luna")
+        : state.mode === "manual-variant"
+          ? tuiManualDetails(state, "Variante manual", "Escribe el nombre que acepta tu proveedor; por ejemplo thinking")
+          : state.mode === "policies"
+            ? tuiPolicyDetails(state)
+            : state.mode === "review"
+              ? tuiReviewDetails(state, rightWidth)
+              : state.selected < tuiAssignments().length
+                ? tuiAssignmentDetails(state, tuiAssignments()[state.selected], rightWidth)
+                : [tuiBold("Selecciona una sección"), "", tuiDim("Usa ↑↓ para moverte y Enter para abrirla.")]
+  const left = tuiLeftLines(state)
+  const content: string[] = [top, `│${tuiFit(tuiHeader(state), width - 2)}│`, divider]
+  for (let index = 0; index < bodyHeight; index += 1) content.push(`│${tuiFit(left[index] ?? "", leftWidth)}│${tuiFit(right[index] ?? "", rightWidth)}│`)
+  content.push(divider.replace("┬", "┴").replace("┤", "┤"))
+  content.push(`│${tuiFit(state.status || "", width - 2)}│`)
+  content.push(`│${tuiFit(tuiDim("↑↓ navegar  Enter abrir  Tab/manual editar  s revisar  q cancelar"), width - 2)}│`)
+  content.push(bottom)
+  output.write(`${tuiEscape}H${tuiEscape}2J${content.join("\n")}`)
+}
+
+function tuiStartEditing(state: TuiState): void {
+  const assignment = tuiAssignments()[state.selected]
+  state.pendingModel = modelValue(state.config, assignment.path)
+  state.pendingOption = state.models.find((model) => model.id === state.pendingModel) ?? { id: state.pendingModel, variants: [], variantsKnown: false }
+  state.pendingVariant = variantValue(state.config, assignment.variantPath)
+  state.modelQuery = ""
+  state.modelCursor = Math.max(0, tuiModelMatches(state).findIndex((model) => model.id === state.pendingModel))
+  state.mode = "model"
+}
+
+function tuiCommitPending(state: TuiState): void {
+  const assignment = tuiAssignments()[state.selected]
+  tuiSetModel(state.config, assignment.path, state.pendingModel)
+  tuiSetVariant(state.config, assignment.variantPath, state.pendingVariant || "default")
+  state.status = `${assignment.label} actualizado. Revisa y guarda cuando estés listo.`
+  state.mode = "main"
+}
+
+function tuiHandleKey(state: TuiState, key: TuiKey): "save" | "cancel" | null {
+  if (key === "cancel") return "cancel"
+  if (state.mode === "main") {
+    if (key === "up") state.selected = (state.selected + tuiAssignments().length + 1) % (tuiAssignments().length + 2)
+    else if (key === "down" || key === "tab") state.selected = (state.selected + 1) % (tuiAssignments().length + 2)
+    else if (key === "escape") return "cancel"
+    else if (key === "enter") {
+      if (state.selected < tuiAssignments().length) tuiStartEditing(state)
+      else if (state.selected === tuiAssignments().length) { state.mode = "policies"; state.policyCursor = 0 }
+      else state.mode = "review"
+    } else if (typeof key === "object" && key.kind === "char" && key.value.toLowerCase() === "s") state.mode = "review"
+    else if (typeof key === "object" && key.kind === "char" && key.value.toLowerCase() === "q") return "cancel"
+    return null
+  }
+  if (state.mode === "model") {
+    const matches = tuiModelMatches(state)
+    if (key === "up" && matches.length) state.modelCursor = (state.modelCursor + matches.length - 1) % matches.length
+    else if (key === "down" && matches.length) state.modelCursor = (state.modelCursor + 1) % matches.length
+    else if (key === "escape") state.mode = "main"
+    else if (key === "tab") { state.manualInput = ""; state.mode = "manual-model" }
+    else if (key === "backspace") { state.modelQuery = state.modelQuery.slice(0, -1); state.modelCursor = 0 }
+    else if (key === "enter" && matches[state.modelCursor]) {
+      const chosen = matches[state.modelCursor]
+      state.pendingModel = chosen.id
+      state.pendingOption = chosen
+      if (chosen.id !== modelValue(state.config, tuiAssignments()[state.selected].path)) state.pendingVariant = "default"
+      state.variantCursor = Math.max(0, tuiVariantChoices(state).indexOf(state.pendingVariant))
+      state.mode = "variant"
+    } else if (typeof key === "object" && key.kind === "char" && key.value >= " ") { state.modelQuery += key.value; state.modelCursor = 0 }
+    return null
+  }
+  if (state.mode === "variant") {
+    const choices = tuiVariantChoices(state)
+    if (key === "up" && choices.length) state.variantCursor = (state.variantCursor + choices.length - 1) % choices.length
+    else if (key === "down" && choices.length) state.variantCursor = (state.variantCursor + 1) % choices.length
+    else if (key === "escape") state.mode = "main"
+    else if (key === "enter" && choices[state.variantCursor]) {
+      if (choices[state.variantCursor] === "custom…") { state.manualInput = state.pendingVariant === "default" ? "" : state.pendingVariant; state.mode = "manual-variant" }
+      else { state.pendingVariant = choices[state.variantCursor]; tuiCommitPending(state) }
+    } else if (typeof key === "object" && key.kind === "char" && key.value.toLowerCase() === "c" && !state.pendingOption?.variantsKnown) { state.manualInput = ""; state.mode = "manual-variant" }
+    return null
+  }
+  if (state.mode === "manual-model") {
+    if (key === "escape") state.mode = "model"
+    else if (key === "backspace") state.manualInput = state.manualInput.slice(0, -1)
+    else if (key === "enter") {
+      if (validModel(state.manualInput)) {
+        state.pendingModel = state.manualInput
+        state.pendingOption = { id: state.manualInput, variants: [], variantsKnown: false }
+        state.pendingVariant = "default"
+        state.variantCursor = 0
+        state.mode = "variant"
+      } else state.status = "Formato inválido. Usa provider/model."
+    } else if (typeof key === "object" && key.kind === "char" && key.value >= " ") state.manualInput += key.value
+    return null
+  }
+  if (state.mode === "manual-variant") {
+    if (key === "escape") state.mode = "variant"
+    else if (key === "backspace") state.manualInput = state.manualInput.slice(0, -1)
+    else if (key === "enter") {
+      if (/^\S+$/.test(state.manualInput)) { state.pendingVariant = state.manualInput; tuiCommitPending(state) }
+      else state.status = "Escribe un nombre de variante."
+    } else if (typeof key === "object" && key.kind === "char" && key.value >= " ") state.manualInput += key.value
+    return null
+  }
+  if (state.mode === "policies") {
+    const item = tuiPolicyItems[state.policyCursor]
+    if (state.policyEditing) {
+      if (key === "up" || key === "left") state.policyChoice = (state.policyChoice + item.choices.length - 1) % item.choices.length
+      else if (key === "down" || key === "right") state.policyChoice = (state.policyChoice + 1) % item.choices.length
+      else if (key === "enter") { tuiSetPolicy(state, item.choices[state.policyChoice]); state.policyEditing = false; state.status = `${item.label} actualizado.` }
+      else if (key === "escape") state.policyEditing = false
+    } else if (key === "up") state.policyCursor = (state.policyCursor + tuiPolicyItems.length - 1) % tuiPolicyItems.length
+    else if (key === "down") state.policyCursor = (state.policyCursor + 1) % tuiPolicyItems.length
+    else if (key === "enter") { state.policyChoice = tuiPolicyItems[state.policyCursor].choices.indexOf(tuiCurrentPolicy(state) as never); state.policyEditing = true }
+    else if (key === "escape") state.mode = "main"
+    return null
+  }
+  if (state.mode === "review") {
+    if (key === "enter" || (typeof key === "object" && key.kind === "char" && key.value.toLowerCase() === "s")) return "save"
+    if (key === "escape") state.mode = "main"
+    if (typeof key === "object" && key.kind === "char" && key.value.toLowerCase() === "q") return "cancel"
+  }
+  return null
+}
+
+async function runConfigureTui(config: WorkflowConfig, models: ModelOption[]): Promise<WorkflowConfig | null> {
+  if (!tuiInteractive()) throw new Error("workflow-ai configure requiere una terminal interactiva")
+  const state: TuiState = {
+    mode: "main", config: tuiClone(config), original: tuiClone(config), models, selected: 0,
+    modelQuery: "", modelCursor: 0, variantCursor: 0, pendingModel: "", pendingOption: null,
+    pendingVariant: "default", manualInput: "", policyCursor: 0, policyEditing: false, policyChoice: 0,
+    status: "Los cambios se aplican solo después de Guardar.",
+  }
+  input.setRawMode(true)
+  input.resume()
+  output.write(`${tuiEscape}?1049h${tuiEscape}?25l`)
+  return await new Promise<WorkflowConfig | null>((resolve) => {
+    const finish = (value: WorkflowConfig | null) => {
+      input.off("data", onData)
+      input.setRawMode(false)
+      input.pause()
+      output.write(`${tuiEscape}?25h${tuiEscape}?1049l`)
+      resolve(value)
+    }
+    const onData = (chunk: Buffer | string) => {
+      for (const key of tuiParseKeys(String(chunk))) {
+        const result = tuiHandleKey(state, key)
+        if (result === "save") { finish(state.config); return }
+        if (result === "cancel") { finish(null); return }
+      }
+      tuiRender(state)
+    }
+    input.on("data", onData)
+    tuiRender(state)
+  })
+}
+
 async function configure(): Promise<void> {
   const existing = await loadConfig()
   const config = mergeConfig(existing ?? undefined)
-  const rl = createInterface({ input, output })
-  try {
-    console.log("\nContinuous Workflow — configuración independiente\n")
-    console.log("Los modelos se aplican únicamente a los agentes workflow-*; el agente por defecto no se modifica.\n")
-    const currentModels = modelAssignments.map((assignment) => modelValue(config, assignment.path))
-    const models = await discoverModelCatalog(currentModels)
-    printModelCatalogSummary(models)
-    for (const assignment of modelAssignments) {
-      const previousModel = modelValue(config, assignment.path)
-      const selected = await askModel(rl, assignment, previousModel, models)
-      const previousVariant = selected.id === previousModel ? variantValue(config, assignment.variantPath) : "default"
-      const variant = await askThinkingLevel(rl, assignment, selected, previousVariant)
-      if (assignment.path === "lead_model") {
-        config.lead_model = selected.id
-        config.lead_variant = variant
-      } else if (assignment.path === "reviewer_model") {
-        config.reviewer_model = selected.id
-        config.reviewer_variant = variant
-      }
-      else {
-        const area = assignment.path.split(".")[1] as AreaName
-        config.areas[area] = selected.id
-        config.area_variants[area] = variant
-      }
-    }
-    config.review_policy = await askChoice(rl, "Política de revisión", config.review_policy, ["required", "optional", "disabled"] as const)
-    config.consultation_policy = await askChoice(rl, "Política de consultores", config.consultation_policy, ["always", "on-demand"] as const)
-    const engram = (await rl.question(`URL de Engram [${config.engram_url}]: `)).trim()
-    if (engram) {
-      try {
-        const parsed = new URL(engram)
-        if (!/^https?:$/.test(parsed.protocol)) throw new Error("protocol")
-        config.engram_url = engram.replace(/\/$/, "")
-      } catch {
-        throw new Error("engram_url debe ser una URL http(s) válida")
-      }
-    }
-  } finally {
-    rl.close()
+  console.log("Preparando el catálogo de modelos…")
+  const currentModels = modelAssignments.map((assignment) => modelValue(config, assignment.path))
+  const models = await discoverModelCatalog(currentModels)
+  const configured = await runConfigureTui(config, models)
+  if (!configured) {
+    console.log("Configuración cancelada. No se guardaron cambios.")
+    return
   }
+  const finalConfig = configured
   Bun.spawnSync(["mkdir", "-p", `${opencodeRoot}/continuous-workflow`])
-  await saveConfig(config)
-  await syncAgentModels(config)
+  await saveConfig(finalConfig)
+  await syncAgentModels(finalConfig)
   console.log(`\nConfiguración guardada en ${configPath}`)
   console.log("Los modelos de los agentes workflow-* fueron sincronizados.")
 }
