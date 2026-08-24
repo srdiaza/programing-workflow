@@ -17,6 +17,11 @@ permission:
     "git diff *": allow
     "git log *": allow
     "git rev-parse *": allow
+    "git push*": ask
+    "git reset --hard*": deny
+    "git clean -fd*": deny
+    "rm -rf*": deny
+    "sudo *": deny
   # workflow-permissions-bash-end
   # workflow-permissions-task-start
   task:

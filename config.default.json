@@ -26,6 +26,7 @@
   "permissions": {
     "edit": "allow",
     "bash": "ask",
+    "git_push": "ask",
     "question": "allow",
     "task": "allow",
     "external_directory": "ask"

@@ -11,6 +11,7 @@ type PermissionMode = "allow" | "ask" | "deny"
 type WorkflowPermissions = {
   edit: PermissionMode
   bash: PermissionMode
+  git_push: "ask" | "deny"
   question: "allow" | "deny"
   task: PermissionMode
   external_directory: PermissionMode
@@ -78,6 +79,7 @@ const defaults: WorkflowConfig = {
   permissions: {
     edit: "allow",
     bash: "ask",
+    git_push: "ask",
     question: "allow",
     task: "allow",
     external_directory: "ask",
@@ -120,6 +122,7 @@ function mergeConfig(value: Partial<WorkflowConfig> | undefined): WorkflowConfig
     permissions: {
       edit: permission(configuredPermissions?.edit, defaults.permissions.edit),
       bash: permission(configuredPermissions?.bash, defaults.permissions.bash),
+      git_push: configuredPermissions?.git_push === "deny" ? "deny" : "ask",
       question: questionPermission,
       task: permission(configuredPermissions?.task, defaults.permissions.task),
       external_directory: permission(configuredPermissions?.external_directory, defaults.permissions.external_directory),
@@ -199,7 +202,7 @@ function markedBlock(content: string, start: string, end: string, replacement: s
   return content.replace(pattern, `$1${replacement}\n$2`)
 }
 
-function bashPermissionBlock(mode: PermissionMode): string {
+function bashPermissionBlock(mode: PermissionMode, gitPush: "ask" | "deny"): string {
   const lines = ["  bash:", `    \"*\": ${mode}`]
   if (mode !== "deny") {
     lines.push(
@@ -211,7 +214,7 @@ function bashPermissionBlock(mode: PermissionMode): string {
     )
   }
   lines.push(
-    '    "git push*": deny',
+    `    "git push*": ${mode === "deny" ? "deny" : gitPush}`,
     '    "git reset --hard*": deny',
     '    "git clean -fd*": deny',
     '    "rm -rf*": deny',
@@ -239,7 +242,7 @@ async function syncAgentPermissions(config: WorkflowConfig): Promise<void> {
   let current = await file.text()
   current = current.replace(/^  question:\s*.*$/m, `  question: ${permissions.question}`)
   current = current.replace(/^  edit:\s*.*$/m, `  edit: ${permissions.edit}`)
-  current = markedBlock(current, "workflow-permissions-bash-start", "workflow-permissions-bash-end", bashPermissionBlock(permissions.bash))
+  current = markedBlock(current, "workflow-permissions-bash-start", "workflow-permissions-bash-end", bashPermissionBlock(permissions.bash, permissions.git_push))
   current = markedBlock(current, "workflow-permissions-task-start", "workflow-permissions-task-end", taskPermissionBlock(permissions.task))
   current = markedBlock(current, "workflow-permissions-external-start", "workflow-permissions-external-end", [
     "  external_directory:",
@@ -686,7 +689,8 @@ const tuiPolicyItems = [
 
 const tuiPermissionItems = [
   { key: "edit", label: "Edición de archivos", description: "Permite que el Lead escriba, modifique y aplique parches.", choices: ["allow", "ask", "deny"] as const },
-  { key: "bash", label: "Comandos shell", description: "Controla los comandos Bash; push, reset destructivo y sudo permanecen bloqueados.", choices: ["allow", "ask", "deny"] as const },
+  { key: "bash", label: "Comandos shell", description: "Controla los comandos Bash; reset destructivo, rm -rf y sudo permanecen bloqueados.", choices: ["allow", "ask", "deny"] as const },
+  { key: "git_push", label: "Git push", description: "Permite proponer un push y pedir aprobación antes de ejecutarlo.", choices: ["ask", "deny"] as const },
   { key: "task", label: "Subagentes", description: "Controla el lanzamiento de los consultores workflow-* permitidos.", choices: ["allow", "ask", "deny"] as const },
   { key: "external_directory", label: "Fuera del proyecto", description: "Permite acceder a rutas externas; el directorio de estado del workflow siempre se conserva.", choices: ["allow", "ask", "deny"] as const },
   { key: "question", label: "Preguntas interactivas", description: "Permite que el Lead pause y solicite una decisión con opciones.", choices: ["allow", "deny"] as const },
@@ -917,6 +921,7 @@ function tuiReviewDetails(state: TuiState, width: number): string[] {
     `${tuiCyan("Consultores")}   ${state.config.consultation_policy}`,
     `${tuiCyan("Edición")}      ${state.config.permissions.edit}`,
     `${tuiCyan("Shell")}        ${state.config.permissions.bash}`,
+    `${tuiCyan("Git push")}    ${state.config.permissions.git_push}`,
     `${tuiCyan("Subagentes")}   ${state.config.permissions.task}`,
     `${tuiCyan("Externos")}     ${state.config.permissions.external_directory}`,
     `${tuiCyan("Preguntas")}    ${state.config.permissions.question}`,

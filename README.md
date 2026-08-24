@@ -44,12 +44,13 @@ The configuration opens as a full-screen terminal interface. The left panel cont
 The **Permisos** section controls only `workflow-lead`:
 
 - **Edición de archivos** — whether the Lead may edit without approval (`allow`), must ask (`ask`), or is blocked (`deny`).
-- **Comandos shell** — the same policy for Bash commands. `git push`, destructive reset/clean, `rm -rf`, and `sudo` remain blocked by the workflow's hard safety rules.
+- **Comandos shell** — the same policy for Bash commands. `git reset --hard`, destructive clean, `rm -rf`, and `sudo` remain blocked by the workflow's hard safety rules.
+- **Git push** — whether a push asks for your approval (`ask`) or remains blocked (`deny`). It is `ask` by default.
 - **Subagentes** — whether the approved `workflow-*` consultants and reviewer run automatically, ask first, or are disabled.
 - **Fuera del proyecto** — access to directories outside the project. The workflow state directory remains available so recovery continues to work.
 - **Preguntas interactivas** — whether the Lead may pause and present a question with options. Set this to `deny` for truly unattended runs.
 
-The defaults preserve normal interactive behavior: editing is automatic, shell and external-directory access ask, approved subagents run automatically, and the Lead may ask questions. The settings are stored under `permissions` in `~/.config/opencode/continuous-workflow/config.json` and are synchronized only into the workflow Lead; they do not change global OpenCode permissions.
+The defaults preserve normal interactive behavior: editing is automatic, shell and external-directory access ask, `git push` asks, approved subagents run automatically, and the Lead may ask questions. The settings are stored under `permissions` in `~/.config/opencode/continuous-workflow/config.json` and are synchronized only into the workflow Lead; they do not change global OpenCode permissions.
 
 ### 3. Open a project and select the Lead
 
