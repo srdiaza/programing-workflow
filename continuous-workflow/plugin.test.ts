@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { spawnSync } from "node:child_process"
 import ContinuousWorkflow from "../plugins/continuous_workflow"
-import { WORKFLOW_SCHEMA, type WorkflowState } from "./runtime"
+import { WORKFLOW_SCHEMA, type WorkflowState } from "./runtime.ts"
 
 const repositories: string[] = []
 
@@ -143,7 +143,7 @@ describe("Continuous Workflow plugin enforcement", () => {
     const plugin = await hooks(repo.cwd)
     await identify(plugin, "lead", "workflow-lead")
     const verified = state(repo.cwd, repo.contractHash, "verification")
-    const { treeFingerprint } = await import("./runtime")
+    const { treeFingerprint } = await import("./runtime.ts")
     const fingerprint = treeFingerprint(repo.cwd)
     verified.verification = { status: "passed", treeFingerprint: fingerprint, evidence: ["tests pass"] }
     await cacheState(plugin, "lead", verified)

@@ -27,7 +27,7 @@ import {
   type Owner,
   type Phase,
   type WorkflowState,
-} from "../continuous-workflow/runtime"
+} from "../continuous-workflow/runtime.ts"
 
 const WORKFLOW_AGENT = "workflow-lead"
 const WORKFLOW_AGENT_PREFIX = "workflow-lead-"

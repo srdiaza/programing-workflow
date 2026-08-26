@@ -9,7 +9,7 @@ import {
   readyGateErrors,
   treeFingerprint,
   type WorkflowState,
-} from "./runtime"
+} from "./runtime.ts"
 
 const repositories: string[] = []
 

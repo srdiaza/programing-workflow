@@ -8,7 +8,7 @@ import {
   normalizeWorkflowState,
   treeFingerprint,
   type WorkflowState,
-} from "../continuous-workflow/runtime"
+} from "../continuous-workflow/runtime.ts"
 
 const LEAD = "workflow-lead"
 const LEAD_PREFIX = "workflow-lead-"
