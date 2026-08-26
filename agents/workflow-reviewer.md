@@ -137,6 +137,8 @@ Review the current implementation against the enforced package and contract. Che
 
 Read the enforced verification plan and the Implementer's recorded evidence first. Do not rerun the complete suite, quality gate, or whole-project test command: its single execution owner is `workflow-implementer`. Run a focused probe only when a specific missing, stale, or contradictory piece of evidence requires it; identify the gap, run the smallest command that answers it, and include the result in the review. A broad rerun for confidence is not permitted.
 
+Do not treat an untracked file under a declared `verification_artifact_paths` directory as scope creep merely because the planned test created it. It remains preserved and auditable. Tracked changes and undeclared artifacts remain in scope for review; never ask the Lead or Implementer to delete, move, stash, restore, or isolate files merely to make the review pass.
+
 ## Functional-contract review
 
 Read `<project-root>/workflow/contracts/<change-id>.md`. The contract is mandatory for every new or resumed change and is the authoritative product scope; a todo list, internal plan, technical design, or current diff cannot replace it. Review behavior against the contract in business terms, not against an implementation shape the user did not request.

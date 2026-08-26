@@ -48,7 +48,7 @@ function state(cwd: string, contractHash: string, phase: WorkflowState["phase"] 
     implementationBrief: { status: "presented", contractHash, summary: "brief" },
     delivery: { status: "prepared", strategy: "single-branch", branch: "feature/plugin-test", baseBranch: "main", worktree: cwd },
     capabilities: [{ id: "C1", behavior: "gate behavior", kind: "current", status: "pending" }],
-    verificationPlan: { status: "planned", tier: "focused", owner: "workflow-implementer", reason: "isolated change", requiredChecks: ["focused tests"] },
+    verificationPlan: { status: "planned", tier: "focused", owner: "workflow-implementer", reason: "isolated change", requiredChecks: ["focused tests"], artifactPaths: [] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
   }
@@ -180,6 +180,17 @@ describe("Continuous Workflow plugin enforcement", () => {
       { tool: "bash", sessionID: "reviewer", callID: "reviewer-focused" },
       { args: { command: "python -m pytest backend/tests/test_entries.py" } },
     )).resolves.toBeUndefined()
+  })
+
+  test("artifact cleanup cannot be delegated to make a review pass", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    await cacheState(plugin, "lead", state(repo.cwd, repo.contractHash))
+    await expect(plugin["tool.execute.before"](
+      { tool: "task", sessionID: "lead", callID: "cleanup" },
+      { args: { subagent_type: "workflow-implementer", prompt: "isolate unrelated artifacts from the worktree" } },
+    )).rejects.toThrow("ARTIFACT SAFETY")
   })
 
   test("a read-only subagent mutation is detected after delegation", async () => {

@@ -66,6 +66,7 @@ You receive an enforced package from `workflow-lead` containing the exact approv
 - Preserve every future-direction capability and every explicit non-goal.
 - Add or update the tests needed to prove the requested observable behavior.
 - Execute the recorded verification plan. Run focused checks as you work when useful; run a recorded complete suite only once, after all planned code/test edits are frozen for the candidate fingerprint. Do not run it per file, per slice, or merely for reassurance. If an edit follows verification, report that the old evidence is stale so the Lead records the next plan.
+- Preserve every test/runtime artifact. Never delete, move, stash, restore, or isolate files in order to make verification pass. If a planned command produces declared artifact paths, report them as evidence; undeclared artifacts are a scope finding for the Lead, not cleanup work for you.
 - Return changed paths, behavior implemented, tests run, failures, remaining uncertainty, and any discovered scope conflict.
 
 ## Hard boundaries

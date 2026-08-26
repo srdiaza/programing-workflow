@@ -103,6 +103,7 @@ export type WorkflowState = {
     owner: "workflow-implementer" | ""
     reason: string
     requiredChecks: string[]
+    artifactPaths: string[]
     plannedAt?: string
   }
   verification: {
@@ -136,7 +137,7 @@ export function normalizeWorkflowState(value: unknown): WorkflowState | null {
     const current = candidate as WorkflowState
     return {
       ...current,
-      verificationPlan: current.verificationPlan ?? { status: "missing", owner: "", reason: "", requiredChecks: [] },
+      verificationPlan: { ...(current.verificationPlan ?? { status: "missing", owner: "", reason: "", requiredChecks: [] }), artifactPaths: current.verificationPlan?.artifactPaths ?? [] },
     }
   }
   if (candidate.schema !== LEGACY_WORKFLOW_SCHEMA) return null
@@ -159,7 +160,7 @@ export function normalizeWorkflowState(value: unknown): WorkflowState | null {
       worktree: legacy.worktree ?? "",
     },
     capabilities: [],
-    verificationPlan: { status: "missing", owner: "", reason: "", requiredChecks: [] },
+    verificationPlan: { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
   }
@@ -179,7 +180,7 @@ export function isProtectedBranch(branch: string): boolean {
   return branch === "main" || branch === "master"
 }
 
-export function treeFingerprint(worktree: string): string {
+export function treeFingerprint(worktree: string, artifactPaths: string[] = []): string {
   const hash = createHash("sha256")
   const commands = [
     ["rev-parse", "HEAD"],
@@ -188,12 +189,15 @@ export function treeFingerprint(worktree: string): string {
     ["ls-files", "--others", "--exclude-standard", "-z"],
   ]
   const outputs = commands.map((args) => git(worktree, args))
-  for (const [index, output] of outputs.entries()) {
+  for (const [index, output] of outputs.slice(0, 3).entries()) {
     hash.update(String(index))
     hash.update(output.ok ? output.stdout : Buffer.from("<git-error>"))
   }
 
-  const untracked = outputs[3].ok ? outputs[3].stdout.toString().split("\0").filter(Boolean).sort() : []
+  const allowed = artifactPaths.map((path) => path.replace(/^\.\//, "").replace(/\/$/, "")).filter(Boolean)
+  const untracked = (outputs[3].ok ? outputs[3].stdout.toString().split("\0").filter(Boolean) : [])
+    .filter((relative) => !allowed.some((path) => relative === path || relative.startsWith(`${path}/`)))
+    .sort()
   for (const relative of untracked) {
     hash.update(relative)
     try { hash.update(readFileSync(`${worktree}/${relative}`)) } catch { hash.update("<unreadable>") }
@@ -223,7 +227,7 @@ export function implementationGateErrors(state: WorkflowState, worktree: string)
 export function readyGateErrors(state: WorkflowState, worktree: string): string[] {
   const errors = implementationGateErrors(state, worktree)
   if (state.phase !== "verification" && state.phase !== "delivery") errors.push(`workflow phase must be verification or delivery (current: ${state.phase})`)
-  const fingerprint = treeFingerprint(worktree)
+  const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
   if (state.verification.status !== "passed" || state.verification.treeFingerprint !== fingerprint) errors.push("verification is missing or stale for the current tree")
   if (state.review.status !== "passed" || state.review.treeFingerprint !== fingerprint) errors.push("independent review is missing or stale for the current tree")
   if (state.review.findings.length > 0) errors.push(`${state.review.findings.length} review finding(s) remain unresolved`)

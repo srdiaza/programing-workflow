@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { spawnSync } from "node:child_process"
 import {
@@ -55,7 +55,7 @@ function state(cwd: string): WorkflowState {
       { id: "F1", behavior: "future path", kind: "future", status: "preserved", evidence: "design inspection" },
       { id: "N1", behavior: "excluded behavior", kind: "non-goal", status: "excluded", evidence: "diff inspection" },
     ],
-    verificationPlan: { status: "planned", tier: "focused", owner: "workflow-implementer", reason: "isolated change", requiredChecks: ["focused tests"] },
+    verificationPlan: { status: "planned", tier: "focused", owner: "workflow-implementer", reason: "isolated change", requiredChecks: ["focused tests"], artifactPaths: [] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
   }
@@ -92,7 +92,7 @@ describe("Continuous Workflow v2 gates", () => {
   test("implementation requires a complete verification plan owned by the Implementer", () => {
     const cwd = repository()
     const candidate = state(cwd)
-    candidate.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [] }
+    candidate.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] }
     expect(implementationGateErrors(candidate, cwd)).toContain("verification plan is missing, incomplete, or has no workflow-implementer owner")
   })
 
@@ -100,6 +100,15 @@ describe("Continuous Workflow v2 gates", () => {
     const legacyCurrent = { ...state("/tmp/current"), verificationPlan: undefined }
     const normalized = normalizeWorkflowState(legacyCurrent)
     expect(normalized?.verificationPlan.status).toBe("missing")
+  })
+
+  test("declared untracked test artifacts do not invalidate the candidate fingerprint", () => {
+    const cwd = repository()
+    const before = treeFingerprint(cwd, ["backend/uploads"])
+    mkdirSync(`${cwd}/backend/uploads`, { recursive: true })
+    writeFileSync(`${cwd}/backend/uploads/generated.pdf`, "test artifact")
+    expect(treeFingerprint(cwd, ["backend/uploads"])).toBe(before)
+    expect(treeFingerprint(cwd)).not.toBe(before)
   })
 
   test("ready evidence is invalidated by any candidate tree change", () => {

@@ -172,6 +172,7 @@ Verification is a planned, single-owner activity, not an expensive ritual repeat
 - Do not run the complete suite yourself. You select it, inspect its evidence, and record it; the Implementer runs it once after all planned code/test edits are frozen for that candidate fingerprint.
 - Do not use a complete suite as a substitute for targeted functional verification. If code changes after verification, return to planning, record a new plan for the new candidate, and let the Implementer rerun only what that new plan requires.
 - The independent reviewer must not repeat the complete suite. It may run a narrowly targeted probe only when it identifies a concrete evidence gap, and must report that gap and probe.
+- Never delete, move, stash, restore, isolate, or rewrite project files merely to make a verification or review pass. When a planned test legitimately creates untracked runtime artifacts, record their exact project-relative file/directory paths in `verification_artifact_paths`; they are preserved and excluded only from the untracked-file portion of the candidate fingerprint. Tracked changes are never excluded. Any artifact not declared this way remains visible for review.
 
 Before any mutating work:
 

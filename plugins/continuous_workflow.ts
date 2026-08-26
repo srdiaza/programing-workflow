@@ -29,6 +29,7 @@ const READ_ONLY_SUBAGENTS = new Set([
 type TaskSnapshot = {
   subagent: string
   fingerprint: string
+  artifactPaths: string[]
   contractHash: string
   contractPath: string
 }
@@ -130,6 +131,10 @@ function sha256File(path: string): string {
 
 function contractHash(state: WorkflowState, worktree: string): string {
   return sha256File(`${worktree}/${state.contract.path}`)
+}
+
+function workflowFingerprint(state: WorkflowState, worktree: string): string {
+  return treeFingerprint(worktree, state.verificationPlan.artifactPaths)
 }
 
 function reviewReceiptPath(state: WorkflowState, worktree: string): string {
@@ -333,7 +338,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         }
         if (output.args?.operation === "transition" && output.args?.phase === "verification") {
           const current = stateRequired(state)
-          const fingerprint = treeFingerprint(cwd)
+          const fingerprint = workflowFingerprint(current, cwd)
           const receipt = implementationReceipts.get(input.sessionID) ?? persistedImplementationReceipt(current, cwd, fingerprint)
           if (current.phase !== "implementation" || !receipt || receipt.fingerprint !== fingerprint) {
             throw new Error("CONTINUOUS WORKFLOW IMPLEMENTATION RECEIPT: transition to verification requires a completed workflow-implementer task for the current tree")
@@ -342,7 +347,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         if (output.args?.operation === "review_record") {
           const current = stateRequired(state)
           const receipt = reviewReceipts.get(input.sessionID) ?? persistedReviewReceipt(current, cwd)
-          const fingerprint = treeFingerprint(cwd)
+          const fingerprint = workflowFingerprint(current, cwd)
           if (!receipt || receipt.fingerprint !== fingerprint || current.verification.treeFingerprint !== fingerprint) {
             throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: review_record requires workflow-reviewer output for the currently verified tree")
           }
@@ -365,7 +370,10 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: SDD, Gentle AI, and OpenSpec subagents are forbidden")
         }
         const base = baseAgent(requested)
-        const fingerprint = treeFingerprint(cwd)
+        if (base === IMPLEMENTER && /\b(?:isolate|clean(?:up)?|stash|restore|relocate|move)\b.*\b(?:artifact|unrelated|worktree|upload|backup)/i.test(String(output.args?.prompt ?? ""))) {
+          throw new Error("CONTINUOUS WORKFLOW ARTIFACT SAFETY: do not move, delete, stash, restore, or isolate files to satisfy review; record expected test artifact paths in verification_plan instead")
+        }
+        const fingerprint = workflowFingerprint(current, cwd)
         const key = `${input.sessionID}:${input.callID}`
 
         if (base === IMPLEMENTER) {
@@ -389,7 +397,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
             : packagePrompt(current, "consultation", fingerprint)}`
         }
 
-        taskSnapshots.set(key, { subagent: base, fingerprint, contractHash: contractHash(current, cwd), contractPath: current.contract.path })
+        taskSnapshots.set(key, { subagent: base, fingerprint, artifactPaths: current.verificationPlan.artifactPaths, contractHash: contractHash(current, cwd), contractPath: current.contract.path })
         return
       }
 
@@ -454,7 +462,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       taskSnapshots.delete(key)
       if (!snapshot) return
 
-      const after = treeFingerprint(cwd)
+      const after = treeFingerprint(cwd, snapshot.artifactPaths)
       const changed = after !== snapshot.fingerprint
       const current = states.get(input.sessionID)
       const currentContractHash = current ? contractHash(current, cwd) : ""
