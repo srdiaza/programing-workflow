@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import {
   currentBranch,
   implementationGateErrors,
@@ -106,6 +106,32 @@ function sha256File(path: string): string {
 
 function contractHash(state: WorkflowState, worktree: string): string {
   return sha256File(`${worktree}/${state.contract.path}`)
+}
+
+function reviewReceiptPath(state: WorkflowState, worktree: string): string {
+  const stateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+    || `${process.env.XDG_STATE_HOME || `${process.env.HOME || "/tmp"}/.local/share`}/opencode/continuous-workflow`
+  const key = createHash("sha256")
+    .update(JSON.stringify({ worktree, changeId: state.changeId, contractHash: state.contract.hash, fingerprint: state.verification.treeFingerprint }))
+    .digest("hex")
+  return `${stateRoot}/review-receipts/${key}.json`
+}
+
+function persistReviewReceipt(state: WorkflowState, worktree: string, receipt: TaskReceipt): void {
+  try {
+    const path = reviewReceiptPath(state, worktree)
+    mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true })
+    writeFileSync(path, JSON.stringify(receipt), "utf8")
+  } catch {}
+}
+
+function persistedReviewReceipt(state: WorkflowState, worktree: string): TaskReceipt | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(reviewReceiptPath(state, worktree), "utf8"))
+    return typeof parsed?.fingerprint === "string" && typeof parsed?.output === "string" ? parsed as TaskReceipt : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function stateRequired(state: WorkflowState | undefined): WorkflowState {
@@ -235,13 +261,13 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         }
         if (output.args?.operation === "review_record") {
           const current = stateRequired(state)
-          const receipt = reviewReceipts.get(input.sessionID)
+          const receipt = reviewReceipts.get(input.sessionID) ?? persistedReviewReceipt(current, cwd)
           const fingerprint = treeFingerprint(cwd)
           if (!receipt || receipt.fingerprint !== fingerprint || current.verification.treeFingerprint !== fingerprint) {
             throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: review_record requires workflow-reviewer output for the currently verified tree")
           }
-          const reportedPass = /(?:^|\n)\s*(?:Verdict:\s*)?PASS\s*(?:—|-|:)?\s*no concrete findings\b/i.test(receipt.output)
-          const reportedBlocked = /(?:^|\n)\s*(?:Verdict:\s*)?BLOCKED\b/i.test(receipt.output)
+          const reportedPass = /(?:^|\n)\s*(?:(?:Verdict|Veredicto):\s*)?PASS\s*(?:—|-|:)?\s*(?:no concrete findings|sin hallazgos(?: concretos)?|sin findings)\b/i.test(receipt.output)
+          const reportedBlocked = /(?:^|\n)\s*(?:(?:Verdict|Veredicto):\s*)?BLOCKED\b/i.test(receipt.output)
           if (output.args?.review_outcome === "passed" && (!reportedPass || reportedBlocked)) {
             throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: a passing state cannot be recorded from reviewer output that is not an explicit zero-finding PASS")
           }
@@ -359,7 +385,11 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         reviewReceipts.delete(input.sessionID)
         output.output = `${output.output}\n\n[Continuous Workflow] Candidate tree fingerprint after implementation: ${after}. The Lead must inspect the actual diff before transitioning to verification.`
       }
-      if (snapshot.subagent === REVIEWER) reviewReceipts.set(input.sessionID, { fingerprint: after, output: String(output.output ?? "") })
+      if (snapshot.subagent === REVIEWER) {
+        const receipt = { fingerprint: after, output: String(output.output ?? "") }
+        reviewReceipts.set(input.sessionID, receipt)
+        if (current) persistReviewReceipt(current, cwd, receipt)
+      }
     },
 
     "experimental.session.compacting": async (input, output) => {

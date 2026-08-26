@@ -217,6 +217,35 @@ describe("Continuous Workflow plugin enforcement", () => {
     )).rejects.toThrow("zero-finding PASS")
   })
 
+  test("review receipt survives compaction and accepts the required Spanish PASS verdict", async () => {
+    const repo = repository()
+    const receiptStateRoot = mkdtempSync(`${tmpdir()}/continuous-workflow-receipt-`)
+    const priorStateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+    process.env.CONTINUOUS_WORKFLOW_STATE_DIR = receiptStateRoot
+    try {
+      const plugin = await hooks(repo.cwd)
+      await identify(plugin, "lead", "workflow-lead")
+      const verified = state(repo.cwd, repo.contractHash, "verification")
+      const { treeFingerprint } = await import("./runtime.ts")
+      verified.verification = { status: "passed", treeFingerprint: treeFingerprint(repo.cwd), evidence: ["tests pass"] }
+      await cacheState(plugin, "lead", verified)
+      const reviewInput = { tool: "task", sessionID: "lead", callID: "review-durable" }
+      const reviewOutput = { args: { subagent_type: "workflow-reviewer", prompt: "review" }, output: "Veredicto: PASS — sin hallazgos concretos" }
+      await plugin["tool.execute.before"](reviewInput, reviewOutput)
+      await plugin["tool.execute.after"](reviewInput, reviewOutput)
+      await plugin["experimental.session.compacting"]({ sessionID: "lead" }, { context: [] })
+      await cacheState(plugin, "lead", verified)
+      await expect(plugin["tool.execute.before"](
+        { tool: "workflow_state", sessionID: "lead", callID: "record-durable" },
+        { args: { operation: "review_record", review_outcome: "passed" } },
+      )).resolves.toBeUndefined()
+    } finally {
+      if (priorStateRoot === undefined) delete process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+      else process.env.CONTINUOUS_WORKFLOW_STATE_DIR = priorStateRoot
+      rmSync(receiptStateRoot, { recursive: true, force: true })
+    }
+  })
+
   test("contract approval requires a new explicit user response", async () => {
     const repo = repository()
     const plugin = await hooks(repo.cwd)
