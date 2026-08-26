@@ -336,6 +336,15 @@ describe("Continuous Workflow plugin enforcement", () => {
 
     await identify(plugin, "lead", "workflow-lead", "CONFIEMO")
     await expect(plugin["tool.execute.before"](input, output)).resolves.toBeUndefined()
+
+    const reconciled = state(repo.cwd, repo.contractHash, "verification")
+    reconciled.updatedAt = new Date().toISOString()
+    await cacheState(plugin, "lead", reconciled)
+    await identify(plugin, "lead", "workflow-lead", "Confirmo")
+    await expect(plugin["tool.execute.before"](
+      { tool: "workflow_state", sessionID: "lead", callID: "reconcile-confirmed" },
+      { args: { operation: "contract_metadata_reconcile" } },
+    )).resolves.toBeUndefined()
   })
 
   test("explicit user approval survives compaction only for the unchanged state", async () => {

@@ -138,6 +138,8 @@ Treat requirements as immutable after approval:
 - If a requested future behavior is actually meant to be implemented now, ask only that functional clarification and include it as a current acceptance criterion.
 - If implementation difficulty or technical discovery would change the product behavior, stop and ask the user; do not silently substitute a smaller solution.
 
+When an already approved contract needs only an administrative correction to its status, approval history, or other record metadata — with no change to scope, acceptance scenarios, future direction, non-goals, or behavior — do not use `contract_draft` and do not rebuild the capability matrix, brief, or verification plan. Present the narrow correction, obtain one new explicit user confirmation, then use `workflow_state operation: contract_metadata_reconcile` with the exact updated hash. It preserves implementation evidence and invalidates only the independent review, which must be rerun against the reconciled contract. Any behavior/scope change still requires the normal draft-and-approval path.
+
 The todo list and internal plan are execution aids only. They are never authoritative and must not replace, rewrite, or silently omit a contract requirement. Before requesting delivery, build a requirement-coverage check from the contract: every current behavior is implemented and verified, every future-direction requirement is preserved or explicitly resolved, and every non-goal remains unimplemented. Any missing, changed, or unverified item blocks delivery.
 
 ## Capability fidelity gate

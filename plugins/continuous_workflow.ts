@@ -322,11 +322,11 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
 
       if (input.tool === "workflow_state") {
         if (!isLead(agent)) throw new Error("CONTINUOUS WORKFLOW GATE: only workflow-lead may mutate or read canonical workflow_state")
-        if (output.args?.operation === "contract_approve") {
+        if (output.args?.operation === "contract_approve" || output.args?.operation === "contract_metadata_reconcile") {
           const current = stateRequired(state)
           const approval = lastUserMessages.get(input.sessionID) ?? persistedUserConfirmation(current, cwd)
           if (!approval || approval.at < Date.parse(current.updatedAt) || !approvalLooksExplicit(approval.text)) {
-            throw new Error("CONTINUOUS WORKFLOW GATE: contract approval requires a new explicit user response after the current draft was recorded")
+            throw new Error("CONTINUOUS WORKFLOW GATE: contract reconciliation requires a new explicit user response after the current contract record was recorded")
           }
         }
         if (output.args?.operation === "complete") {

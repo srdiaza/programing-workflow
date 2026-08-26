@@ -346,7 +346,7 @@ const findingSchema = tool.schema.object({
 export default tool({
   description: "Manage Continuous Workflow v2. Contract, delivery, implementation, verification, review, and completion gates are typed and enforced; only workflow-lead may mutate canonical state.",
   args: {
-    operation: tool.schema.enum(["start", "status", "claim", "recover", "delivery_prepare", "contract_draft", "contract_approve", "capabilities_record", "brief_present", "verification_plan", "transition", "checkpoint", "consultation", "verification_record", "review_record", "ready", "complete", "reopen", "abort"]),
+    operation: tool.schema.enum(["start", "status", "claim", "recover", "delivery_prepare", "contract_draft", "contract_approve", "contract_metadata_reconcile", "capabilities_record", "brief_present", "verification_plan", "transition", "checkpoint", "consultation", "verification_record", "review_record", "ready", "complete", "reopen", "abort"]),
     change_id: tool.schema.string().describe("Stable change identifier"),
     goal: tool.schema.string().optional(),
     acceptance_criteria: tool.schema.array(tool.schema.string()).optional(),
@@ -480,6 +480,17 @@ export default tool({
           state = event(state, "contract_approved", summary, context.agent, context.sessionID)
           state.contract = { ...state.contract, status: "approved", approvedAt: state.updatedAt, approvalSessionID: context.sessionID, approvalEvidence: summary }
           state.nextAction = nextAction || "Record the capability matrix and obtain any required technical consultations"
+        } else if (operation === "contract_metadata_reconcile") {
+          if (args.confirmation !== "explicit_user_contract_approval") throw new Error("explicit_user_contract_approval confirmation is required")
+          if (state.contract.status !== "approved") throw new Error("administrative reconciliation requires an already approved contract")
+          if (state.phase !== "verification" && state.phase !== "delivery") throw new Error("administrative reconciliation is allowed only after implementation, during verification or delivery")
+          const actualHash = actualContractHash(worktree, state.contract.path)
+          if (!asText(args.contract_hash) || asText(args.contract_hash) !== actualHash) throw new Error("administrative reconciliation must reference the exact current contract hash")
+          if (!summary) throw new Error("summary must describe the administrative correction and user confirmation")
+          state = event(state, "contract_metadata_reconciled", summary, context.agent, context.sessionID)
+          state.contract = { ...state.contract, version: state.contract.version + 1, hash: actualHash, status: "approved", approvedAt: state.updatedAt, approvalSessionID: context.sessionID, approvalEvidence: summary }
+          state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
+          state.nextAction = nextAction || "Launch a fresh independent review against the reconciled approved contract and current verified tree"
         } else if (operation === "capabilities_record") {
           if (state.contract.status !== "approved") throw new Error("approve the contract before recording capabilities")
           const capabilities = (args.capabilities ?? []) as Capability[]
