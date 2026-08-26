@@ -150,6 +150,17 @@ function packagePrompt(state: WorkflowState, kind: "implementation" | "review" |
   return `\n\n## Continuous Workflow enforced package\n\`\`\`json\n${JSON.stringify(packageData, null, 2)}\n\`\`\`\n`
 }
 
+function discoveryPrompt(state: WorkflowState, fingerprint: string): string {
+  const discovery = {
+    change_id: state.changeId,
+    user_goal: state.goal,
+    acceptance_criteria: state.acceptanceCriteria,
+    candidate_tree_fingerprint: fingerprint,
+    authority: "Pre-contract, read-only discovery only. Establish facts about current behavior, visible terminology, data, constraints, and genuine ambiguities. Do not edit files, write a contract, choose product scope, design the solution, or implement anything. Report evidence and questions for workflow-lead to synthesize into a user-facing contract.",
+  }
+  return `\n\n## Continuous Workflow pre-contract discovery\n\`\`\`json\n${JSON.stringify(discovery, null, 2)}\n\`\`\`\n`
+}
+
 export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
   const cwd = worktree || directory
   const agents = new Map<string, string>()
@@ -257,8 +268,13 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           }
           output.args.prompt = `${String(output.args.prompt ?? "")}${packagePrompt(current, "review", fingerprint)}`
         } else if (READ_ONLY_SUBAGENTS.has(base)) {
-          if (current.contract.status !== "approved") throw new Error("CONTINUOUS WORKFLOW CONSULTATION GATE: approve the functional contract before specialist delegation")
-          output.args.prompt = `${String(output.args.prompt ?? "")}${packagePrompt(current, "consultation", fingerprint)}`
+          const preContractDiscovery = current.phase === "discovery" && current.contract.status === "missing"
+          if (!preContractDiscovery && current.contract.status !== "approved") {
+            throw new Error("CONTINUOUS WORKFLOW CONSULTATION GATE: approve the functional contract before specialist delegation outside pre-contract discovery")
+          }
+          output.args.prompt = `${String(output.args.prompt ?? "")}${preContractDiscovery
+            ? discoveryPrompt(current, fingerprint)
+            : packagePrompt(current, "consultation", fingerprint)}`
         }
 
         taskSnapshots.set(key, { subagent: base, fingerprint, contractHash: contractHash(current, cwd), contractPath: current.contract.path })

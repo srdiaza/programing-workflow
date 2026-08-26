@@ -83,15 +83,17 @@ Every tier keeps the mandatory quality gates, tests, review, scope checks, and u
 
 The following order is a hard gate for every new or resumed change. It is not a suggestion, and no todo list, specialist consultation, reviewer result, existing code, or prior general approval can bypass it:
 
-1. Read or start the change through `workflow_state`.
-2. Create or update the visible functional contract at `<project-root>/workflow/contracts/<change-id>.md`.
-3. Present the complete contract or a faithful plain-language rendering to the user and wait for explicit approval of that contract version.
-4. Present a plain-language implementation brief: what user-visible behavior will change, what will remain unchanged, what will not be implemented now, and how each current capability will be verified. This is an explanation of the intended work, not a request for the user to design the technical solution.
-5. Only after the approved contract is recorded may the Lead delegate relevant specialist inspections. The independent reviewer is reserved for the verified implementation candidate.
-6. Reconcile delegated findings against the contract and implementation brief. If the findings change behavior, scope, or future direction, stop, update the contract, present the change, and obtain approval again.
-7. Only after those gates may the Lead transition to implementation and delegate the approved package to `workflow-implementer`. The Lead must never mutate application code or tests directly.
+1. Read or start the change through `workflow_state`, inspect project-local instructions, and establish the user's intended outcome.
+2. In the `discovery` phase, delegate the relevant read-only specialists to establish current behavior, visible terminology, data relationships, constraints, and genuine ambiguities. This is fact-finding only: no code, contract, product-scope, or solution-design decisions may be delegated or made.
+3. Reconcile the factual discovery results with the user's request. Ask the user only about a genuine functional ambiguity that cannot be resolved from the request and the repository.
+4. Create or update the visible functional contract at `<project-root>/workflow/contracts/<change-id>.md`.
+5. Present the complete contract or a faithful plain-language rendering to the user and wait for explicit approval of that contract version.
+6. Present a plain-language implementation brief: what user-visible behavior will change, what will remain unchanged, what will not be implemented now, and how each current capability will be verified. This is an explanation of the intended work, not a request for the user to design the technical solution.
+7. Only after the approved contract is recorded may the Lead delegate solution-oriented specialist inspections. The independent reviewer is reserved for the verified implementation candidate.
+8. Reconcile delegated findings against the contract and implementation brief. If the findings change behavior, scope, or future direction, stop, update the contract, present the change, and obtain approval again.
+9. Only after those gates may the Lead transition to implementation and delegate the approved package to `workflow-implementer`. The Lead must never mutate application code or tests directly.
 
-The first mutation for a new or resumed change must be the contract file, never application code. Before any delegation or code edit, verify that the exact contract file exists, has an approved version, and that `workflow_state` records the approval and implementation-brief checkpoint. If any of those facts is missing, stop and perform the missing gate. Do not start a reviewer “to help define the scope” and do not use a specialist report as a substitute for the user's contract approval.
+The first mutation for a new or resumed change must be the contract file, never application code. Pre-contract discovery delegation is the sole exception to the “approved contract before delegation” rule, and it is read-only fact-finding only. Before any code edit, solution-oriented delegation, or implementation delegation, verify that the exact contract file exists, has an approved version, and that `workflow_state` records the approval and implementation-brief checkpoint. If any of those facts is missing, stop and perform the missing gate. Do not start a reviewer “to help define the scope” and do not use a specialist report as a substitute for the user's contract approval.
 
 For a resumed change with existing edits, the Lead must create the contract draft and implementation reconciliation before any further mutation. The user must see what is already implemented, what is missing, and what will be retained or corrected before the Lead continues. Existing code that works is not evidence of approval.
 

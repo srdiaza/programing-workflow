@@ -120,6 +120,30 @@ describe("Continuous Workflow plugin enforcement", () => {
     expect(output.args.prompt).toContain(repo.contractHash)
   })
 
+  test("read-only specialists may perform fact-finding before the contract only in discovery", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    const discovery = state(repo.cwd, repo.contractHash, "discovery")
+    discovery.contract = { path: "workflow/contracts/plugin-test.md", version: 0, hash: "", status: "missing" }
+    discovery.implementationBrief = { status: "missing", contractHash: "", summary: "" }
+    await cacheState(plugin, "lead", discovery)
+
+    const allowed = { args: { subagent_type: "workflow-backend", prompt: "inspect reconciliation facts" } }
+    await expect(plugin["tool.execute.before"](
+      { tool: "task", sessionID: "lead", callID: "pre-contract-discovery" },
+      allowed,
+    )).resolves.toBeUndefined()
+    expect(allowed.args.prompt).toContain("pre-contract discovery")
+
+    discovery.phase = "planning"
+    await cacheState(plugin, "lead", discovery)
+    await expect(plugin["tool.execute.before"](
+      { tool: "task", sessionID: "lead", callID: "pre-contract-planning" },
+      { args: { subagent_type: "workflow-backend", prompt: "inspect" } },
+    )).rejects.toThrow("approve the functional contract")
+  })
+
   test("a read-only subagent mutation is detected after delegation", async () => {
     const repo = repository()
     const plugin = await hooks(repo.cwd)
