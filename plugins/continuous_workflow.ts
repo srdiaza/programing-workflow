@@ -134,6 +134,10 @@ function forbiddenLeadFileMutation(command: string): boolean {
     || /(^|\s)(>|>>)(\s|$)/.test(command)
 }
 
+function externalWorkflowInvocation(value: string): boolean {
+  return /\b(?:gentle-ai|sdd(?:[-_][a-z0-9_-]+)?|openspec)\b/i.test(value)
+}
+
 function packagePrompt(state: WorkflowState, kind: "implementation" | "review" | "consultation", fingerprint: string): string {
   const packageData = {
     schema: state.schema,
@@ -252,6 +256,9 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         if (!isLead(agent)) throw new Error("CONTINUOUS WORKFLOW GATE: workflow-implementer cannot delegate")
         const current = stateRequired(state)
         const requested = typeof output.args?.subagent_type === "string" ? output.args.subagent_type : ""
+        if (externalWorkflowInvocation(requested)) {
+          throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: SDD, Gentle AI, and OpenSpec subagents are forbidden")
+        }
         const base = baseAgent(requested)
         const fingerprint = treeFingerprint(cwd)
         const key = `${input.sessionID}:${input.callID}`
@@ -305,6 +312,9 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
 
       if (input.tool === "bash") {
         const command = String(output.args?.command ?? output.args?.cmd ?? "")
+        if ((isLead(agent) || isImplementer(agent)) && externalWorkflowInvocation(command)) {
+          throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: SDD, Gentle AI, and OpenSpec commands are forbidden")
+        }
         if (isLead(agent)) {
           if (forbiddenLeadGit(command)) throw new Error("CONTINUOUS WORKFLOW SAFETY GATE: destructive or history-rewriting Git operation is forbidden for workflow-lead")
           if (forbiddenLeadFileMutation(command)) throw new Error("CONTINUOUS WORKFLOW AUTHORSHIP GATE: workflow-lead cannot mutate project files through Bash; use the contract edit gate or workflow-implementer")

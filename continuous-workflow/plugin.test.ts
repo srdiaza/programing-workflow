@@ -144,6 +144,22 @@ describe("Continuous Workflow plugin enforcement", () => {
     )).rejects.toThrow("approve the functional contract")
   })
 
+  test("external SDD, Gentle AI, and OpenSpec invocations are forbidden", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    await cacheState(plugin, "lead", state(repo.cwd, repo.contractHash))
+
+    await expect(plugin["tool.execute.before"](
+      { tool: "task", sessionID: "lead", callID: "sdd-agent" },
+      { args: { subagent_type: "sdd-verify", prompt: "verify" } },
+    )).rejects.toThrow("INDEPENDENCE GATE")
+    await expect(plugin["tool.execute.before"](
+      { tool: "bash", sessionID: "lead", callID: "sdd-command" },
+      { args: { command: "sdd-verify" } },
+    )).rejects.toThrow("INDEPENDENCE GATE")
+  })
+
   test("a read-only subagent mutation is detected after delegation", async () => {
     const repo = repository()
     const plugin = await hooks(repo.cwd)
