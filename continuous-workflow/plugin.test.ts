@@ -256,6 +256,15 @@ describe("Continuous Workflow plugin enforcement", () => {
       { args: { operation: "review_record", review_outcome: "passed" } },
     )).resolves.toBeUndefined()
 
+    taskOutput.output = "Verdict: PASS\nCoverage: reviewed contract and candidate tree"
+    taskInput.callID = "review-bare-pass"
+    await plugin["tool.execute.before"](taskInput, taskOutput)
+    await plugin["tool.execute.after"](taskInput, taskOutput)
+    await expect(plugin["tool.execute.before"](
+      { tool: "workflow_state", sessionID: "lead", callID: "record-bare-pass" },
+      { args: { operation: "review_record", review_outcome: "passed" } },
+    )).resolves.toBeUndefined()
+
     taskOutput.output = "Verdict: BLOCKED\nFinding R1"
     taskInput.callID = "review-blocked"
     await plugin["tool.execute.before"](taskInput, taskOutput)

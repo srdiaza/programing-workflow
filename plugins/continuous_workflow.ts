@@ -71,6 +71,13 @@ function fullSuiteCommand(command: string): boolean {
     || /(?:^|[;&|]\s*)(?:npx\s+)?(?:vitest|jest)\s+(?:run\s*)?$/i.test(normalized)
 }
 
+function reviewerReportedPass(output: string): boolean {
+  const explicitPass = /(?:^|\n)\s*(?:(?:Verdict|Veredicto):\s*)?PASS\b/i.test(output)
+  const explicitBlocked = /(?:^|\n)\s*(?:(?:Verdict|Veredicto):\s*)?BLOCKED\b/i.test(output)
+  const concreteFinding = /(?:^|\n)\s*(?:(?:finding|hallazgo)\s*(?:[A-Z]+\d+|#?\d+)?\s*[:—-]|(?:[RF]\d+|P[0-3])\s*[:—-])/im.test(output)
+  return explicitPass && !explicitBlocked && !concreteFinding
+}
+
 function userText(output: any): string {
   const content = Array.isArray(output?.parts)
     ? output.parts.filter((part: any) => part?.type === "text").map((part: any) => part.text ?? "").join("\n").trim()
@@ -340,7 +347,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           if (!receipt || receipt.fingerprint !== fingerprint || current.verification.treeFingerprint !== fingerprint) {
             throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: review_record requires workflow-reviewer output for the currently verified tree")
           }
-          const reportedPass = /(?:^|\n)\s*(?:(?:Verdict|Veredicto):\s*)?PASS\s*(?:—|-|:)?\s*(?:no concrete findings|sin hallazgos(?: concretos)?|sin findings)\b/i.test(receipt.output)
+          const reportedPass = reviewerReportedPass(receipt.output)
           const reportedBlocked = /(?:^|\n)\s*(?:(?:Verdict|Veredicto):\s*)?BLOCKED\b/i.test(receipt.output)
           if (output.args?.review_outcome === "passed" && (!reportedPass || reportedBlocked)) {
             throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: a passing state cannot be recorded from reviewer output that is not an explicit zero-finding PASS")

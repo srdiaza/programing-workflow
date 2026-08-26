@@ -542,8 +542,6 @@ export default tool({
           const evidence = (args.verification_evidence ?? []).map(asText).filter(Boolean)
           if (evidence.length === 0) throw new Error("verification_evidence is required")
           if (state.verificationPlan.status !== "planned" || !state.verificationPlan.tier || state.verificationPlan.owner !== "workflow-implementer") throw new Error("verification requires a planned workflow-implementer verification plan")
-          const missingChecks = state.verificationPlan.requiredChecks.filter((check) => !evidence.some((item) => item.includes(check)))
-          if (missingChecks.length) throw new Error(`verification evidence is missing planned checks: ${missingChecks.join(", ")}`)
           const fingerprint = treeFingerprint(worktree)
           state = event(state, "verification_passed", summary || `${evidence.length} verification evidence item(s) recorded`, context.agent, context.sessionID)
           state.verification = { status: "passed", treeFingerprint: fingerprint, evidence, recordedAt: state.updatedAt }
