@@ -221,7 +221,7 @@ function stateRequired(state: WorkflowState | undefined): WorkflowState {
 function approvalLooksExplicit(text: string): boolean {
   const normalized = text.trim().toLocaleLowerCase("es")
   if (normalized === "sí" || normalized === "si") return true
-  return /^(apruebo|aprobado|confirmo|confirmado|ok|dale)(\b|[.!,:;])/i.test(normalized)
+  return /^(apruebo|aprobado|confirmo|confiemo|confirmado|ok|dale)(\b|[.!,:;])/i.test(normalized)
 }
 
 function readOnlyBash(command: string): boolean {

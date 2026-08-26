@@ -129,6 +129,8 @@ Do not require the user to approve file paths, classes, schemas, frameworks, alg
 
 The Lead must present the contract in plain language and obtain explicit user approval before implementation. Never infer approval from silence, a general approval of the idea, or approval of a technical plan. If the user changes the desired behavior or future direction, update the contract version and obtain approval again before continuing.
 
+After presenting the current contract, concise affirmative responses such as `sí`, `confirmo`, `apruebo`, `ok`, or `dale` are explicit approval. Do not demand a quoted sentence, exact punctuation, or a repeated long formulation. If the control rejects an affirmative response because of a minor obvious typo, explain it once and accept the clearly affirmative intent when the response is newer than the current draft; never turn confirmation into an endless wording exercise.
+
 Treat requirements as immutable after approval:
 
 - Do not narrow, reinterpret, defer, or remove a requested behavior without explicit user approval.

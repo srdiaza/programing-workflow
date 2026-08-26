@@ -328,6 +328,9 @@ describe("Continuous Workflow plugin enforcement", () => {
     await expect(plugin["tool.execute.before"](input, output)).rejects.toThrow("explicit user response")
     await identify(plugin, "lead", "workflow-lead", "Apruebo este contrato")
     await expect(plugin["tool.execute.before"](input, output)).resolves.toBeUndefined()
+
+    await identify(plugin, "lead", "workflow-lead", "CONFIEMO")
+    await expect(plugin["tool.execute.before"](input, output)).resolves.toBeUndefined()
   })
 
   test("explicit user approval survives compaction only for the unchanged state", async () => {
