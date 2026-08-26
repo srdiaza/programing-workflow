@@ -88,6 +88,16 @@ describe("Continuous Workflow plugin enforcement", () => {
       { tool: "edit", sessionID: "lead", callID: "contract" },
       { args: { filePath: `${repo.cwd}/workflow/contracts/plugin-test.md` } },
     )).resolves.toBeUndefined()
+
+    await expect(plugin["tool.execute.before"](
+      { tool: "apply_patch", sessionID: "lead", callID: "new-contract" },
+      { args: { patch: "*** Begin Patch\n*** Add File: workflow/contracts/plugin-test.md\n+# Contract\n*** End Patch" } },
+    )).resolves.toBeUndefined()
+
+    await expect(plugin["tool.execute.before"](
+      { tool: "apply_patch", sessionID: "lead", callID: "new-app-file" },
+      { args: { patch: "*** Begin Patch\n*** Add File: app.txt\n+unexpected\n*** End Patch" } },
+    )).rejects.toThrow("workflow-lead may edit only")
   })
 
   test("Implementer delegation requires the complete implementation gate", async () => {

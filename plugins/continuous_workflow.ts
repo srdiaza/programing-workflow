@@ -77,8 +77,20 @@ function targetPaths(args: any): string[] {
   for (const key of ["filePath", "filepath", "file_path", "path"]) {
     if (typeof args?.[key] === "string") paths.add(args[key])
   }
-  const serialized = JSON.stringify(args ?? {})
-  for (const match of serialized.matchAll(/\*\*\* (?:Add|Update|Delete) File: ([^\n"]+)/g)) paths.add(match[1])
+  const inspect = (value: unknown): void => {
+    if (typeof value === "string") {
+      for (const match of value.matchAll(/\*\*\* (?:Add|Update|Delete) File: ([^\r\n]+)/g)) paths.add(match[1].trim())
+      return
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) inspect(item)
+      return
+    }
+    if (value && typeof value === "object") {
+      for (const item of Object.values(value)) inspect(item)
+    }
+  }
+  inspect(args)
   return [...paths]
 }
 
