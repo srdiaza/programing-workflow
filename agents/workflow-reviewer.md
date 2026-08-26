@@ -166,10 +166,12 @@ Require evidence that the Lead followed the execution order: approved functional
 
 Every concrete finding is blocking by default. Severity (`P0`/`P1`/`P2`/`P3`, or an equivalent scale) controls urgency and ordering; it does not make a finding non-blocking. Do not label concrete defects, regressions, missing validation, scope violations, unexpected mutations, or workflow-state/traceability failures as `Non-blocking risks`, `low priority`, `informational`, or `ship it` items.
 
-For each finding, report an ID, severity, category, exact path and location, evidence, impact, required correction, and verification needed after correction. The review must end with one of these outcomes:
+For each finding, report an ID, severity, category, exact path and location, evidence, impact, required correction, and verification needed after correction. The final non-empty line of the review must be exactly one of these machine-readable receipts (no Markdown, bold text, punctuation, translation, or text after it):
 
-- `BLOCKED — findings require correction`: one or more concrete findings remain.
-- `PASS — no concrete findings`: no correction is required.
+- `WORKFLOW_REVIEW_OUTCOME: BLOCKED` — one or more concrete findings remain.
+- `WORKFLOW_REVIEW_OUTCOME: PASS` — no correction is required.
+
+This exact final receipt is mandatory. Do not use `Verdict`, `Veredicto`, `Ship it`, or any alternative wording for the outcome. The Lead can record a passing state only from `WORKFLOW_REVIEW_OUTCOME: PASS`, and a blocked state only from `WORKFLOW_REVIEW_OUTCOME: BLOCKED`.
 
 Use `suggestion` only for a genuinely optional preference that is not a defect, regression risk, scope problem, or missing acceptance evidence. Optional suggestions must be kept separate from findings and must never be used to hide a concrete issue. Never conclude `Ship it` while any finding remains unresolved.
 

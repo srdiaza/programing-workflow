@@ -71,11 +71,10 @@ function fullSuiteCommand(command: string): boolean {
     || /(?:^|[;&|]\s*)(?:npx\s+)?(?:vitest|jest)\s+(?:run\s*)?$/i.test(normalized)
 }
 
-function reviewerReportedPass(output: string): boolean {
-  const explicitPass = /(?:^|\n)\s*(?:(?:Verdict|Veredicto):\s*)?PASS\b/i.test(output)
-  const explicitBlocked = /(?:^|\n)\s*(?:(?:Verdict|Veredicto):\s*)?BLOCKED\b/i.test(output)
-  const concreteFinding = /(?:^|\n)\s*(?:(?:finding|hallazgo)\s*(?:[A-Z]+\d+|#?\d+)?\s*[:—-]|(?:[RF]\d+|P[0-3])\s*[:—-])/im.test(output)
-  return explicitPass && !explicitBlocked && !concreteFinding
+function reviewerOutcome(output: string): "passed" | "blocked" | undefined {
+  const match = output.match(/(?:^|\n)WORKFLOW_REVIEW_OUTCOME:\s*(PASS|BLOCKED)\s*$/i)
+  if (!match) return undefined
+  return match[1].toUpperCase() === "PASS" ? "passed" : "blocked"
 }
 
 function userText(output: any): string {
@@ -347,13 +346,12 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           if (!receipt || receipt.fingerprint !== fingerprint || current.verification.treeFingerprint !== fingerprint) {
             throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: review_record requires workflow-reviewer output for the currently verified tree")
           }
-          const reportedPass = reviewerReportedPass(receipt.output)
-          const reportedBlocked = /(?:^|\n)\s*(?:(?:Verdict|Veredicto):\s*)?BLOCKED\b/i.test(receipt.output)
-          if (output.args?.review_outcome === "passed" && (!reportedPass || reportedBlocked)) {
-            throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: a passing state cannot be recorded from reviewer output that is not an explicit zero-finding PASS")
+          const reportedOutcome = reviewerOutcome(receipt.output)
+          if (output.args?.review_outcome === "passed" && reportedOutcome !== "passed") {
+            throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: a passing state requires the final exact line WORKFLOW_REVIEW_OUTCOME: PASS")
           }
-          if (output.args?.review_outcome === "blocked" && !reportedBlocked) {
-            throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: blocked review state requires an explicit BLOCKED reviewer verdict")
+          if (output.args?.review_outcome === "blocked" && reportedOutcome !== "blocked") {
+            throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: blocked review state requires the final exact line WORKFLOW_REVIEW_OUTCOME: BLOCKED")
           }
         }
         return

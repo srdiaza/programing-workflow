@@ -248,7 +248,7 @@ describe("Continuous Workflow plugin enforcement", () => {
     await cacheState(plugin, "lead", verified)
 
     const taskInput = { tool: "task", sessionID: "lead", callID: "review-pass" }
-    const taskOutput = { args: { subagent_type: "workflow-reviewer", prompt: "review" }, output: "Verdict: PASS — no concrete findings" }
+    const taskOutput = { args: { subagent_type: "workflow-reviewer", prompt: "review" }, output: "Coverage: reviewed candidate tree\nWORKFLOW_REVIEW_OUTCOME: PASS" }
     await plugin["tool.execute.before"](taskInput, taskOutput)
     await plugin["tool.execute.after"](taskInput, taskOutput)
     await expect(plugin["tool.execute.before"](
@@ -256,23 +256,23 @@ describe("Continuous Workflow plugin enforcement", () => {
       { args: { operation: "review_record", review_outcome: "passed" } },
     )).resolves.toBeUndefined()
 
-    taskOutput.output = "Verdict: PASS\nCoverage: reviewed contract and candidate tree"
-    taskInput.callID = "review-bare-pass"
+    taskOutput.output = "Verdict: PASS — no concrete findings"
+    taskInput.callID = "review-ambiguous-pass"
     await plugin["tool.execute.before"](taskInput, taskOutput)
     await plugin["tool.execute.after"](taskInput, taskOutput)
     await expect(plugin["tool.execute.before"](
-      { tool: "workflow_state", sessionID: "lead", callID: "record-bare-pass" },
+      { tool: "workflow_state", sessionID: "lead", callID: "record-ambiguous-pass" },
       { args: { operation: "review_record", review_outcome: "passed" } },
-    )).resolves.toBeUndefined()
+    )).rejects.toThrow("final exact line WORKFLOW_REVIEW_OUTCOME: PASS")
 
-    taskOutput.output = "Verdict: BLOCKED\nFinding R1"
+    taskOutput.output = "Finding R1\nWORKFLOW_REVIEW_OUTCOME: BLOCKED"
     taskInput.callID = "review-blocked"
     await plugin["tool.execute.before"](taskInput, taskOutput)
     await plugin["tool.execute.after"](taskInput, taskOutput)
     await expect(plugin["tool.execute.before"](
       { tool: "workflow_state", sessionID: "lead", callID: "false-pass" },
       { args: { operation: "review_record", review_outcome: "passed" } },
-    )).rejects.toThrow("zero-finding PASS")
+    )).rejects.toThrow("final exact line WORKFLOW_REVIEW_OUTCOME: PASS")
   })
 
   test("review receipt survives compaction and accepts the required Spanish PASS verdict", async () => {
@@ -288,7 +288,7 @@ describe("Continuous Workflow plugin enforcement", () => {
       verified.verification = { status: "passed", treeFingerprint: treeFingerprint(repo.cwd), evidence: ["tests pass"] }
       await cacheState(plugin, "lead", verified)
       const reviewInput = { tool: "task", sessionID: "lead", callID: "review-durable" }
-      const reviewOutput = { args: { subagent_type: "workflow-reviewer", prompt: "review" }, output: "Veredicto: PASS — sin hallazgos concretos" }
+      const reviewOutput = { args: { subagent_type: "workflow-reviewer", prompt: "review" }, output: "Cobertura: árbol revisado\nWORKFLOW_REVIEW_OUTCOME: PASS" }
       await plugin["tool.execute.before"](reviewInput, reviewOutput)
       await plugin["tool.execute.after"](reviewInput, reviewOutput)
       await plugin["experimental.session.compacting"]({ sessionID: "lead" }, { context: [] })
