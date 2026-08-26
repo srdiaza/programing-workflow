@@ -188,6 +188,33 @@ describe("Continuous Workflow plugin enforcement", () => {
     await expect(plugin["tool.execute.before"](transition, transitionOutput)).resolves.toBeUndefined()
   })
 
+  test("implementation receipt survives compaction", async () => {
+    const repo = repository()
+    const receiptStateRoot = mkdtempSync(`${tmpdir()}/continuous-workflow-implementation-receipt-`)
+    const priorStateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+    process.env.CONTINUOUS_WORKFLOW_STATE_DIR = receiptStateRoot
+    try {
+      const plugin = await hooks(repo.cwd)
+      await identify(plugin, "lead", "workflow-lead")
+      const implementation = state(repo.cwd, repo.contractHash)
+      await cacheState(plugin, "lead", implementation)
+      const taskInput = { tool: "task", sessionID: "lead", callID: "implement-durable" }
+      const taskOutput = { args: { subagent_type: "workflow-implementer", prompt: "implement" }, output: "Implemented approved package" }
+      await plugin["tool.execute.before"](taskInput, taskOutput)
+      await plugin["tool.execute.after"](taskInput, taskOutput)
+      await plugin["experimental.session.compacting"]({ sessionID: "lead" }, { context: [] })
+      await cacheState(plugin, "lead", implementation)
+      await expect(plugin["tool.execute.before"](
+        { tool: "workflow_state", sessionID: "lead", callID: "verify-durable" },
+        { args: { operation: "transition", phase: "verification" } },
+      )).resolves.toBeUndefined()
+    } finally {
+      if (priorStateRoot === undefined) delete process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+      else process.env.CONTINUOUS_WORKFLOW_STATE_DIR = priorStateRoot
+      rmSync(receiptStateRoot, { recursive: true, force: true })
+    }
+  })
+
   test("passing review state requires an explicit zero-finding Reviewer receipt", async () => {
     const repo = repository()
     const plugin = await hooks(repo.cwd)
@@ -259,5 +286,38 @@ describe("Continuous Workflow plugin enforcement", () => {
     await expect(plugin["tool.execute.before"](input, output)).rejects.toThrow("explicit user response")
     await identify(plugin, "lead", "workflow-lead", "Apruebo este contrato")
     await expect(plugin["tool.execute.before"](input, output)).resolves.toBeUndefined()
+  })
+
+  test("explicit user approval survives compaction only for the unchanged state", async () => {
+    const repo = repository()
+    const receiptStateRoot = mkdtempSync(`${tmpdir()}/continuous-workflow-confirmation-`)
+    const priorStateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+    process.env.CONTINUOUS_WORKFLOW_STATE_DIR = receiptStateRoot
+    try {
+      const plugin = await hooks(repo.cwd)
+      await identify(plugin, "lead", "workflow-lead")
+      const draft = state(repo.cwd, repo.contractHash, "planning")
+      draft.contract.status = "draft"
+      draft.updatedAt = new Date().toISOString()
+      await cacheState(plugin, "lead", draft)
+      await identify(plugin, "lead", "workflow-lead", "Apruebo este contrato")
+      await plugin["experimental.session.compacting"]({ sessionID: "lead" }, { context: [] })
+      await cacheState(plugin, "lead", draft)
+      await expect(plugin["tool.execute.before"](
+        { tool: "workflow_state", sessionID: "lead", callID: "approve-durable" },
+        { args: { operation: "contract_approve" } },
+      )).resolves.toBeUndefined()
+
+      draft.updatedAt = new Date(Date.now() + 1000).toISOString()
+      await cacheState(plugin, "lead", draft)
+      await expect(plugin["tool.execute.before"](
+        { tool: "workflow_state", sessionID: "lead", callID: "approve-stale" },
+        { args: { operation: "contract_approve" } },
+      )).rejects.toThrow("explicit user response")
+    } finally {
+      if (priorStateRoot === undefined) delete process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+      else process.env.CONTINUOUS_WORKFLOW_STATE_DIR = priorStateRoot
+      rmSync(receiptStateRoot, { recursive: true, force: true })
+    }
   })
 })

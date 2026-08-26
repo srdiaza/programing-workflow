@@ -38,6 +38,11 @@ type TaskReceipt = {
   output: string
 }
 
+type UserConfirmation = {
+  text: string
+  at: number
+}
+
 function baseAgent(agent: string): string {
   for (const base of [IMPLEMENTER, ...READ_ONLY_SUBAGENTS]) {
     if (agent === base || agent.startsWith(base + "-")) return base
@@ -134,6 +139,56 @@ function persistedReviewReceipt(state: WorkflowState, worktree: string): TaskRec
   }
 }
 
+function implementationReceiptPath(state: WorkflowState, worktree: string, fingerprint: string): string {
+  const stateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+    || `${process.env.XDG_STATE_HOME || `${process.env.HOME || "/tmp"}/.local/share`}/opencode/continuous-workflow`
+  const key = createHash("sha256")
+    .update(JSON.stringify({ worktree, changeId: state.changeId, contractHash: state.contract.hash, fingerprint }))
+    .digest("hex")
+  return `${stateRoot}/implementation-receipts/${key}.json`
+}
+
+function persistImplementationReceipt(state: WorkflowState, worktree: string, receipt: TaskReceipt): void {
+  try {
+    const path = implementationReceiptPath(state, worktree, receipt.fingerprint)
+    mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true })
+    writeFileSync(path, JSON.stringify(receipt), "utf8")
+  } catch {}
+}
+
+function persistedImplementationReceipt(state: WorkflowState, worktree: string, fingerprint: string): TaskReceipt | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(implementationReceiptPath(state, worktree, fingerprint), "utf8"))
+    return parsed?.fingerprint === fingerprint && typeof parsed?.output === "string" ? parsed as TaskReceipt : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function userConfirmationPath(state: WorkflowState, worktree: string): string {
+  const stateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+    || `${process.env.XDG_STATE_HOME || `${process.env.HOME || "/tmp"}/.local/share`}/opencode/continuous-workflow`
+  const key = createHash("sha256").update(JSON.stringify({ worktree, changeId: state.changeId })).digest("hex")
+  return `${stateRoot}/user-confirmations/${key}.json`
+}
+
+function persistUserConfirmation(state: WorkflowState, worktree: string, confirmation: UserConfirmation): void {
+  try {
+    const path = userConfirmationPath(state, worktree)
+    mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true })
+    writeFileSync(path, JSON.stringify(confirmation), "utf8")
+  } catch {}
+}
+
+function persistedUserConfirmation(state: WorkflowState, worktree: string): UserConfirmation | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(userConfirmationPath(state, worktree), "utf8"))
+    return typeof parsed?.text === "string" && typeof parsed?.at === "number" ? parsed as UserConfirmation : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function stateRequired(state: WorkflowState | undefined): WorkflowState {
   if (!state) throw new Error("CONTINUOUS WORKFLOW GATE: run workflow_state operation=status or start before using mutating/delegating tools")
   return state
@@ -195,7 +250,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
   const cwd = worktree || directory
   const agents = new Map<string, string>()
   const states = new Map<string, WorkflowState>()
-  const lastUserMessages = new Map<string, { text: string; at: number }>()
+  const lastUserMessages = new Map<string, UserConfirmation>()
   const taskSnapshots = new Map<string, TaskSnapshot>()
   const implementationReceipts = new Map<string, TaskReceipt>()
   const reviewReceipts = new Map<string, TaskReceipt>()
@@ -227,7 +282,12 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
 
     "chat.message": async (input, output) => {
       if (input.agent) agents.set(input.sessionID, input.agent)
-      if (isLead(input.agent)) lastUserMessages.set(input.sessionID, { text: userText(output), at: Date.now() })
+      if (isLead(input.agent)) {
+        const confirmation = { text: userText(output), at: Date.now() }
+        lastUserMessages.set(input.sessionID, confirmation)
+        const current = states.get(input.sessionID)
+        if (current && approvalLooksExplicit(confirmation.text)) persistUserConfirmation(current, cwd, confirmation)
+      }
     },
 
     "tool.execute.before": async (input, output) => {
@@ -239,22 +299,22 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         if (!isLead(agent)) throw new Error("CONTINUOUS WORKFLOW GATE: only workflow-lead may mutate or read canonical workflow_state")
         if (output.args?.operation === "contract_approve") {
           const current = stateRequired(state)
-          const approval = lastUserMessages.get(input.sessionID)
+          const approval = lastUserMessages.get(input.sessionID) ?? persistedUserConfirmation(current, cwd)
           if (!approval || approval.at < Date.parse(current.updatedAt) || !approvalLooksExplicit(approval.text)) {
             throw new Error("CONTINUOUS WORKFLOW GATE: contract approval requires a new explicit user response after the current draft was recorded")
           }
         }
         if (output.args?.operation === "complete") {
           const current = stateRequired(state)
-          const approval = lastUserMessages.get(input.sessionID)
+          const approval = lastUserMessages.get(input.sessionID) ?? persistedUserConfirmation(current, cwd)
           if (!approval || approval.at < Date.parse(current.updatedAt) || !approvalLooksExplicit(approval.text)) {
             throw new Error("CONTINUOUS WORKFLOW GATE: completion requires a new explicit user response after the workflow became ready")
           }
         }
         if (output.args?.operation === "transition" && output.args?.phase === "verification") {
           const current = stateRequired(state)
-          const receipt = implementationReceipts.get(input.sessionID)
           const fingerprint = treeFingerprint(cwd)
+          const receipt = implementationReceipts.get(input.sessionID) ?? persistedImplementationReceipt(current, cwd, fingerprint)
           if (current.phase !== "implementation" || !receipt || receipt.fingerprint !== fingerprint) {
             throw new Error("CONTINUOUS WORKFLOW IMPLEMENTATION RECEIPT: transition to verification requires a completed workflow-implementer task for the current tree")
           }
@@ -381,7 +441,9 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         throw new Error(`CONTINUOUS WORKFLOW READ-ONLY VIOLATION: ${snapshot.subagent} changed the project tree; workflow-lead must inspect and resolve the unexpected mutation`)
       }
       if (snapshot.subagent === IMPLEMENTER) {
-        implementationReceipts.set(input.sessionID, { fingerprint: after, output: String(output.output ?? "") })
+        const receipt = { fingerprint: after, output: String(output.output ?? "") }
+        implementationReceipts.set(input.sessionID, receipt)
+        if (current) persistImplementationReceipt(current, cwd, receipt)
         reviewReceipts.delete(input.sessionID)
         output.output = `${output.output}\n\n[Continuous Workflow] Candidate tree fingerprint after implementation: ${after}. The Lead must inspect the actual diff before transitioning to verification.`
       }
