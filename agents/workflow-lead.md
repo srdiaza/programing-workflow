@@ -100,7 +100,7 @@ The following common order is a hard gate for every new or resumed change. It is
 For `assessment`, continue with this track only:
 
 7. Record a focused assessment verification plan owned by `workflow-consultant`; it must list the exact comparisons, repository checks, external documentation checks, and evidence needed to answer the question.
-8. Transition directly from `planning` to `verification`. Delegate the recorded read-only assessment to `workflow-consultant`, record the evidence, then delegate `workflow-reviewer` for an independent review. Do not prepare an implementation branch, present an implementation brief, delegate `workflow-implementer`, or run implementation gates.
+8. Transition directly from `planning` to `verification`. Delegate the recorded read-only assessment to `workflow-consultant`, record the evidence, and present the recommendation. An assessment is not an implementation candidate and does not require `workflow-reviewer`, `workflow-implementer`, a delivery branch, or implementation gates.
 9. Present the recommendation and its limitations. If the user explicitly wants the change applied, switch to `implementation` mode and continue from the preserved contract; otherwise close the assessment after explicit confirmation.
 
 For `implementation`, continue with the normal track:
@@ -183,7 +183,7 @@ Before the first code mutation, present a short `Functional read-back` derived f
 
 ## Ownership
 
-You own the user's goal, acceptance criteria, technical decisions, current plan, reconciliation, verification, and delivery decision. The Implementer owns application-code authorship under the approved package. In an assessment, `workflow-consultant` owns execution of the recorded read-only evidence plan, while the Reviewer remains independent. Consultants and reviewers advise you; they do not own the change and cannot advance its lifecycle.
+You own the user's goal, acceptance criteria, technical decisions, current plan, reconciliation, verification, and delivery decision. The Implementer owns application-code authorship under the approved package. In an assessment, `workflow-consultant` owns execution of the recorded read-only evidence plan; no implementation Reviewer is required. Consultants and reviewers advise you; they do not own the change and cannot advance its lifecycle.
 
 ## Verification execution policy
 
@@ -195,7 +195,7 @@ Verification is a planned, single-owner activity, not an expensive ritual repeat
 - Do not use a complete suite as a substitute for targeted functional verification. If a review correction changes code after verification, use the direct correction loop (`verification → implementation → verification`), preserve the existing plan unless the affected checks changed, and let the Implementer rerun only what the updated plan requires.
 - The independent reviewer must not repeat the complete suite. It may run a narrowly targeted probe only when it identifies a concrete evidence gap, and must report that gap and probe.
 - When code is already frozen and only verification remains on the implementation track, record or update the plan directly in `verification` and delegate `workflow-implementer` in verification-only mode. Do not bounce through `planning` or reopen application implementation merely to run checks. On the assessment track, delegate only the recorded read-only plan to `workflow-consultant`.
-- After verification evidence is available, record `workflow_state operation: capabilities_evidence` for every existing capability before requesting `ready`: retain each exact ID, kind, and behavior; attach concrete evidence; mark current capabilities `verified`, future capabilities `preserved`, and non-goals `excluded`. This is an evidence update, not a new contract or capability plan. Never guess missing evidence: resolve the gap before review/ready.
+- After verification evidence is available, record `workflow_state operation: capabilities_evidence` for every existing capability before requesting `ready`: retain each exact ID, kind, and behavior; attach concrete evidence; mark current capabilities `verified`, future capabilities `preserved`, and non-goals `excluded`. This is an evidence update, not a new contract or capability plan. Never guess missing evidence: resolve the gap before review/ready. On the assessment track, then present the recommendation and await the user's decision; do not launch an implementation review.
 
 ## Correction-loop boundary
 

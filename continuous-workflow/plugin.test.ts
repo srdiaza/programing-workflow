@@ -167,12 +167,62 @@ describe("Continuous Workflow plugin enforcement", () => {
     await expect(plugin["tool.execute.before"](
       { tool: "workflow_state", sessionID: "lead", callID: "assessment-evidence-before" },
       { args: { operation: "verification_record" } },
-    )).rejects.toThrow("completed read-only")
+    )).rejects.toThrow("complete the recorded read-only")
     await plugin["tool.execute.after"](verificationInput, verification)
     await expect(plugin["tool.execute.before"](
       { tool: "workflow_state", sessionID: "lead", callID: "assessment-evidence-after" },
       { args: { operation: "verification_record" } },
     )).resolves.toBeUndefined()
+  })
+
+  test("assessment receipt follows the plan, not unrelated later tree drift or plugin context", async () => {
+    const repo = repository()
+    const receiptStateRoot = mkdtempSync(`${tmpdir()}/continuous-workflow-assessment-receipt-`)
+    const priorStateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+    process.env.CONTINUOUS_WORKFLOW_STATE_DIR = receiptStateRoot
+    try {
+      const assessment = state(repo.cwd, repo.contractHash, "verification")
+      assessment.mode = "assessment"
+      assessment.implementationBrief = { status: "missing", contractHash: "", summary: "" }
+      assessment.delivery = { status: "missing", branch: "", baseBranch: "main", worktree: repo.cwd }
+      assessment.verificationPlan = {
+        status: "planned",
+        tier: "focused",
+        owner: "workflow-consultant",
+        reason: "read-only assessment",
+        requiredChecks: ["inspect current behavior"],
+        artifactPaths: [],
+        plannedAt: new Date().toISOString(),
+      }
+
+      const plugin = await hooks(repo.cwd)
+      await identify(plugin, "lead", "workflow-lead")
+      await cacheState(plugin, "lead", assessment)
+      const taskInput = { tool: "task", sessionID: "lead", callID: "assessment-durable" }
+      const taskOutput = { args: { subagent_type: "workflow-consultant", prompt: "assess" }, output: "assessment complete" }
+      await plugin["tool.execute.before"](taskInput, taskOutput)
+      await plugin["tool.execute.after"](taskInput, taskOutput)
+
+      // This is outside the consultant task. It must not invalidate the
+      // already completed read-only assessment.
+      writeFileSync(`${repo.cwd}/unrelated-after-assessment.txt`, "created later\n")
+
+      const recreated = await ContinuousWorkflow({ directory: `${repo.cwd}/different-plugin-context` } as any)
+      await identify(recreated, "lead", "workflow-lead")
+      await cacheState(recreated, "lead", assessment)
+      await expect(recreated["tool.execute.before"](
+        { tool: "workflow_state", sessionID: "lead", callID: "assessment-record" },
+        { args: { operation: "verification_record" } },
+      )).resolves.toBeUndefined()
+      await expect(recreated["tool.execute.before"](
+        { tool: "task", sessionID: "lead", callID: "assessment-review" },
+        { args: { subagent_type: "workflow-reviewer", prompt: "review" } },
+      )).rejects.toThrow("workflow-consultant completes an assessment")
+    } finally {
+      if (priorStateRoot === undefined) delete process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+      else process.env.CONTINUOUS_WORKFLOW_STATE_DIR = priorStateRoot
+      rmSync(receiptStateRoot, { recursive: true, force: true })
+    }
   })
 
   test("read-only specialists may perform fact-finding before the contract only in discovery", async () => {

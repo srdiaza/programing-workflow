@@ -579,7 +579,9 @@ export default tool({
           state = event(state, "contract_metadata_reconciled", summary, context.agent, context.sessionID)
           state.contract = { ...state.contract, version: state.contract.version + 1, hash: actualHash, status: "approved", approvedAt: state.updatedAt, approvalSessionID: context.sessionID, approvalEvidence: summary }
           state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
-          state.nextAction = nextAction || "Launch a fresh independent review against the reconciled approved contract and current verified tree"
+          state.nextAction = nextAction || (state.mode === "assessment"
+            ? "Continue the existing read-only assessment evidence; do not restart discovery or run an implementation review"
+            : "Launch a fresh independent review against the reconciled approved contract and current verified tree")
         } else if (operation === "capabilities_record") {
           if (state.contract.status !== "approved") throw new Error("approve the contract before recording capabilities")
           const capabilities = (args.capabilities ?? []) as Capability[]
@@ -614,7 +616,9 @@ export default tool({
           }
           state = event(state, "capabilities_evidence_recorded", summary || `${evidence.length} capability evidence item(s) recorded`, context.agent, context.sessionID)
           state.capabilities = evidence
-          state.nextAction = nextAction || "Record or inspect independent review, then request ready when its receipt passes"
+          state.nextAction = nextAction || (state.mode === "assessment"
+            ? "Present the assessment recommendation and its limitations, then await the user's decision"
+            : "Record or inspect independent review, then request ready when its receipt passes")
         } else if (operation === "brief_present") {
           if (state.mode === "assessment") throw new Error("assessment mode does not require an implementation brief; record its read-only verification plan instead")
           if (state.contract.status !== "approved") throw new Error("approve the contract before presenting the implementation brief")
@@ -634,8 +638,19 @@ export default tool({
           const artifactPaths = (args.verification_artifact_paths ?? []).map(asText).filter(Boolean)
           if (artifactPaths.some((path) => path.startsWith("/") || path.includes("..") || /[*?\s]/.test(path))) throw new Error("verification_artifact_paths must be project-relative exact files or directories")
           if (!tier || !reason || requiredChecks.length === 0) throw new Error("verification_tier, verification_reason, and verification_required_checks are required")
+          const previousPlan = state.verificationPlan
+          const planChanged = previousPlan.status !== "planned"
+            || previousPlan.tier !== tier
+            || previousPlan.owner !== (state.mode === "assessment" ? "workflow-consultant" : "workflow-implementer")
+            || previousPlan.reason !== reason
+            || JSON.stringify(previousPlan.requiredChecks) !== JSON.stringify(requiredChecks)
+            || JSON.stringify(previousPlan.artifactPaths) !== JSON.stringify(artifactPaths)
           state = event(state, "verification_planned", summary || `${tier} verification planned`, context.agent, context.sessionID)
           state.verificationPlan = { status: "planned", tier, owner: state.mode === "assessment" ? "workflow-consultant" : "workflow-implementer", reason, requiredChecks, artifactPaths, plannedAt: state.updatedAt }
+          if (planChanged) {
+            state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
+            state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
+          }
           state.nextAction = nextAction || (state.mode === "assessment"
             ? "Transition directly to verification and delegate the recorded assessment to workflow-consultant"
             : "Transition to implementation and delegate the approved package to workflow-implementer")
@@ -679,8 +694,11 @@ export default tool({
           state = event(state, "verification_passed", summary || `${evidence.length} verification evidence item(s) recorded`, context.agent, context.sessionID)
           state.verification = { status: "passed", treeFingerprint: fingerprint, evidence, recordedAt: state.updatedAt }
           state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
-          state.nextAction = nextAction || "Launch independent review against the verified tree"
+          state.nextAction = nextAction || (state.mode === "assessment"
+            ? "Record capability evidence and present the assessment recommendation"
+            : "Launch independent review against the verified tree")
         } else if (operation === "review_record") {
+          if (state.mode === "assessment") throw new Error("assessment does not require an independent review; present the consultant recommendation instead")
           if (state.phase !== "verification") throw new Error("review can only be recorded in verification phase")
           if (state.verification.status !== "passed" || state.verification.treeFingerprint !== treeFingerprint(worktree, state.verificationPlan.artifactPaths)) throw new Error("review requires current verification evidence")
           if (!args.review_outcome) throw new Error("review_outcome is required")
@@ -695,7 +713,9 @@ export default tool({
           if (state.status !== "active") throw new Error(`workflow must be active before ready (current: ${state.status})`)
           const errors = readyGateErrors(state, worktree)
           if (errors.length) throw new Error(`ready gate failed: ${errors.join("; ")}`)
-          state = event(state, "ready_for_confirmation", summary || "Implementation is ready; waiting for explicit user confirmation", context.agent, context.sessionID)
+          state = event(state, "ready_for_confirmation", summary || (state.mode === "assessment"
+            ? "Assessment is ready; waiting for the user's decision"
+            : "Implementation is ready; waiting for explicit user confirmation"), context.agent, context.sessionID)
           state.status = "ready"
           state.phase = "delivery"
           state.nextAction = nextAction || "Await explicit user confirmation before completing this change"

@@ -238,18 +238,23 @@ export function assessmentGateErrors(state: WorkflowState, worktree: string): st
     errors.push("assessment verification plan is missing, incomplete, or has no workflow-consultant owner")
   }
   if (state.phase !== "verification" && state.phase !== "delivery") errors.push(`assessment must be in verification or delivery phase (current: ${state.phase})`)
-  const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
-  if (state.verification.status !== "passed" || state.verification.treeFingerprint !== fingerprint) errors.push("assessment verification is missing or stale for the current tree")
+  // An assessment records a completed read-only investigation, not a
+  // candidate implementation. Its evidence remains valid when unrelated
+  // files change after the consultant finished; implementation/review tracks
+  // retain the strict current-tree check below.
+  if (state.verification.status !== "passed" || !state.verification.treeFingerprint || state.verification.evidence.length === 0) errors.push("assessment verification evidence is missing")
   return errors
 }
 
 export function readyGateErrors(state: WorkflowState, worktree: string): string[] {
   const errors = state.mode === "assessment" ? assessmentGateErrors(state, worktree) : implementationGateErrors(state, worktree)
   if (state.phase !== "verification" && state.phase !== "delivery") errors.push(`workflow phase must be verification or delivery (current: ${state.phase})`)
-  const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
-  if (state.verification.status !== "passed" || state.verification.treeFingerprint !== fingerprint) errors.push("verification is missing or stale for the current tree")
-  if (state.review.status !== "passed" || state.review.treeFingerprint !== fingerprint) errors.push("independent review is missing or stale for the current tree")
-  if (state.review.findings.length > 0) errors.push(`${state.review.findings.length} review finding(s) remain unresolved`)
+  if (state.mode !== "assessment") {
+    const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
+    if (state.verification.status !== "passed" || state.verification.treeFingerprint !== fingerprint) errors.push("verification is missing or stale for the current tree")
+    if (state.review.status !== "passed" || state.review.treeFingerprint !== fingerprint) errors.push("independent review is missing or stale for the current tree")
+    if (state.review.findings.length > 0) errors.push(`${state.review.findings.length} review finding(s) remain unresolved`)
+  }
   for (const capability of state.capabilities) {
     if (capability.kind === "current" && capability.status !== "verified") errors.push(`current capability ${capability.id} is not verified`)
     if (capability.kind === "future" && capability.status !== "preserved") errors.push(`future capability ${capability.id} is not confirmed as preserved`)

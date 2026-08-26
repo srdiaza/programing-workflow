@@ -117,6 +117,27 @@ describe("Continuous Workflow v2 gates", () => {
     expect(assessmentGateErrors(candidate, cwd)).toEqual([])
   })
 
+  test("assessment readiness does not require a candidate-tree review", () => {
+    const cwd = repository()
+    const candidate = state(cwd)
+    candidate.mode = "assessment"
+    candidate.implementationBrief = { status: "missing", contractHash: "", summary: "" }
+    candidate.delivery = { status: "missing", branch: "", baseBranch: "main", worktree: cwd }
+    candidate.verificationPlan = {
+      status: "planned",
+      tier: "focused",
+      owner: "workflow-consultant",
+      reason: "read-only assessment",
+      requiredChecks: ["inspect current behavior"],
+      artifactPaths: [],
+    }
+    candidate.verification = { status: "passed", treeFingerprint: "assessment-run", evidence: ["consultant report"] }
+    expect(readyGateErrors(candidate, cwd)).toEqual([])
+
+    writeFileSync(`${cwd}/tracked.txt`, "changed after assessment\n")
+    expect(readyGateErrors(candidate, cwd)).toEqual([])
+  })
+
   test("current-schema states without a verification plan fail closed while remaining readable", () => {
     const legacyCurrent = { ...state("/tmp/current"), verificationPlan: undefined }
     const normalized = normalizeWorkflowState(legacyCurrent)
