@@ -48,6 +48,7 @@ function state(cwd: string, contractHash: string, phase: WorkflowState["phase"] 
     implementationBrief: { status: "presented", contractHash, summary: "brief" },
     delivery: { status: "prepared", strategy: "single-branch", branch: "feature/plugin-test", baseBranch: "main", worktree: cwd },
     capabilities: [{ id: "C1", behavior: "gate behavior", kind: "current", status: "pending" }],
+    verificationPlan: { status: "planned", tier: "focused", owner: "workflow-implementer", reason: "isolated change", requiredChecks: ["focused tests"] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
   }
@@ -158,6 +159,27 @@ describe("Continuous Workflow plugin enforcement", () => {
       { tool: "bash", sessionID: "lead", callID: "sdd-command" },
       { args: { command: "sdd-verify" } },
     )).rejects.toThrow("INDEPENDENCE GATE")
+  })
+
+  test("complete suites have one execution owner while focused probes remain available", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    await cacheState(plugin, "lead", state(repo.cwd, repo.contractHash))
+    await expect(plugin["tool.execute.before"](
+      { tool: "bash", sessionID: "lead", callID: "lead-full-suite" },
+      { args: { command: "npm run quality-gate" } },
+    )).rejects.toThrow("VERIFICATION OWNERSHIP")
+
+    await identify(plugin, "reviewer", "workflow-reviewer")
+    await expect(plugin["tool.execute.before"](
+      { tool: "bash", sessionID: "reviewer", callID: "reviewer-full-suite" },
+      { args: { command: "python -m pytest" } },
+    )).rejects.toThrow("VERIFICATION OWNERSHIP")
+    await expect(plugin["tool.execute.before"](
+      { tool: "bash", sessionID: "reviewer", callID: "reviewer-focused" },
+      { args: { command: "python -m pytest backend/tests/test_entries.py" } },
+    )).resolves.toBeUndefined()
   })
 
   test("a read-only subagent mutation is detected after delegation", async () => {

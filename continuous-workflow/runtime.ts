@@ -7,10 +7,12 @@ export const LEGACY_WORKFLOW_SCHEMA = "continuous-workflow/v1" as const
 export const PHASES = ["discovery", "planning", "implementation", "verification", "delivery"] as const
 export const STATUSES = ["active", "ready", "completed", "blocked", "aborted"] as const
 export const DELIVERY_STRATEGIES = ["single-branch", "feature-branch-chain", "stacked-prs", "single-pr-exception"] as const
+export const VERIFICATION_TIERS = ["focused", "complete"] as const
 
 export type Phase = (typeof PHASES)[number]
 export type Status = (typeof STATUSES)[number]
 export type DeliveryStrategy = (typeof DELIVERY_STRATEGIES)[number]
+export type VerificationTier = (typeof VERIFICATION_TIERS)[number]
 
 export type Owner = {
   agent: string
@@ -95,6 +97,14 @@ export type WorkflowState = {
     preparedAt?: string
   }
   capabilities: Capability[]
+  verificationPlan: {
+    status: "missing" | "planned"
+    tier?: VerificationTier
+    owner: "workflow-implementer" | ""
+    reason: string
+    requiredChecks: string[]
+    plannedAt?: string
+  }
   verification: {
     status: "missing" | "passed"
     treeFingerprint: string
@@ -110,7 +120,7 @@ export type WorkflowState = {
   }
 }
 
-type LegacyState = Omit<WorkflowState, "schema" | "contract" | "implementationBrief" | "delivery" | "capabilities" | "verification" | "review"> & {
+type LegacyState = Omit<WorkflowState, "schema" | "contract" | "implementationBrief" | "delivery" | "capabilities" | "verificationPlan" | "verification" | "review"> & {
   schema: typeof LEGACY_WORKFLOW_SCHEMA
 }
 
@@ -122,7 +132,13 @@ export function normalizeWorkflowState(value: unknown): WorkflowState | null {
   if (!value || typeof value !== "object") return null
   const candidate = value as Partial<WorkflowState> & { schema?: string; changeId?: string }
   if (!candidate.changeId) return null
-  if (candidate.schema === WORKFLOW_SCHEMA) return candidate as WorkflowState
+  if (candidate.schema === WORKFLOW_SCHEMA) {
+    const current = candidate as WorkflowState
+    return {
+      ...current,
+      verificationPlan: current.verificationPlan ?? { status: "missing", owner: "", reason: "", requiredChecks: [] },
+    }
+  }
   if (candidate.schema !== LEGACY_WORKFLOW_SCHEMA) return null
 
   const legacy = candidate as LegacyState
@@ -143,6 +159,7 @@ export function normalizeWorkflowState(value: unknown): WorkflowState | null {
       worktree: legacy.worktree ?? "",
     },
     capabilities: [],
+    verificationPlan: { status: "missing", owner: "", reason: "", requiredChecks: [] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
   }
@@ -192,6 +209,9 @@ export function implementationGateErrors(state: WorkflowState, worktree: string)
     errors.push("implementation brief is missing or belongs to another contract version")
   }
   if (state.delivery.status !== "prepared") errors.push("delivery branch/worktree has not been prepared")
+  if (state.verificationPlan.status !== "planned" || !state.verificationPlan.tier || state.verificationPlan.owner !== "workflow-implementer" || !state.verificationPlan.reason || state.verificationPlan.requiredChecks.length === 0) {
+    errors.push("verification plan is missing, incomplete, or has no workflow-implementer owner")
+  }
   const branch = currentBranch(worktree)
   if (!branch) errors.push("current Git branch could not be resolved")
   if (isProtectedBranch(branch)) errors.push(`implementation on protected branch ${branch} is forbidden`)

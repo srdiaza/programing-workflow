@@ -131,8 +131,8 @@ For the first request in a project, the Lead works through these stages:
 2. **Functional contract** — writes `workflow/contracts/<change-id>.md` in business language, presents the complete version, and waits for explicit user approval of its exact hash.
 3. **Capabilities and consultation** — separates every current behavior, future direction, and non-goal into observable capabilities, then asks relevant read-only specialists for evidence.
 4. **Implementation brief** — explains what will change, remain possible, stay excluded, and how each capability will be proven.
-5. **Implementation** — delegates the approved package to `workflow-implementer`. The Lead cannot edit application code and must inspect the resulting diff.
-6. **Verification and review** — records test and functional evidence for the current tree fingerprint, then delegates an independent review of that same tree.
+5. **Verification plan and implementation** — the Lead records whether the change needs focused or complete verification, why, and the exact commands. It then delegates the approved package to `workflow-implementer`, which is the sole owner of running any complete suite once after code is frozen. The Lead cannot edit application code and must inspect the resulting diff.
+6. **Verification and review** — records planned test and functional evidence for the current tree fingerprint, then delegates an independent review of that same tree. The Reviewer does not rerun the complete suite; it uses a focused probe only to resolve a concrete evidence gap.
 7. **Correction loop** — every concrete finding blocks delivery, regardless of severity or whether it was pre-existing. Corrections return to the Implementer and require fresh verification and review.
 8. **Ready and Completed** — `ready` waits for explicit user confirmation; `complete` is allowed only afterward.
 

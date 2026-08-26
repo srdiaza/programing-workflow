@@ -58,6 +58,19 @@ function isImplementer(agent: string | undefined): boolean {
   return agent === IMPLEMENTER || Boolean(agent?.startsWith(IMPLEMENTER_PREFIX))
 }
 
+function isReviewer(agent: string | undefined): boolean {
+  return agent === REVIEWER || Boolean(agent?.startsWith(`${REVIEWER}-`))
+}
+
+function fullSuiteCommand(command: string): boolean {
+  const normalized = command.trim()
+  return /(?:^|[;&|]\s*)(?:npm|pnpm)\s+run\s+(?:quality-gate|test(?=\s*$)|test:unit(?=\s*$))\b/i.test(normalized)
+    || /(?:^|[;&|]\s*)yarn\s+(?:run\s+)?(?:quality-gate|test|test:unit)\b/i.test(normalized)
+    || /(?:^|\s)(?:backend\/scripts\/run_quality_gate\.(?:ps1|sh)|\.\/backend\/scripts\/run_quality_gate\.(?:ps1|sh))(?:\s|$)/i.test(normalized)
+    || /(?:^|[;&|]\s*)(?:python3?|uv\s+run\s+python3?)\s+-m\s+pytest(?:\s+(?:-[A-Za-z]|--[\w-]+(?:=[^\s]+)?))*\s*$/i.test(normalized)
+    || /(?:^|[;&|]\s*)(?:npx\s+)?(?:vitest|jest)\s+(?:run\s*)?$/i.test(normalized)
+}
+
 function userText(output: any): string {
   const content = Array.isArray(output?.parts)
     ? output.parts.filter((part: any) => part?.type === "text").map((part: any) => part.text ?? "").join("\n").trim()
@@ -227,6 +240,7 @@ function packagePrompt(state: WorkflowState, kind: "implementation" | "review" |
     implementation_brief: state.implementationBrief,
     delivery: state.delivery,
     capabilities: state.capabilities,
+    verification_plan: state.verificationPlan,
     candidate_tree_fingerprint: fingerprint,
     authority: kind === "implementation"
       ? "Implement exactly this approved package. Do not reinterpret, narrow, or modify the contract."
@@ -292,7 +306,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
 
     "tool.execute.before": async (input, output) => {
       const agent = agentFor(input)
-      if (!isLead(agent) && !isImplementer(agent)) return
+      if (!isLead(agent) && !isImplementer(agent) && !isReviewer(agent)) return
       const state = states.get(input.sessionID)
 
       if (input.tool === "workflow_state") {
@@ -392,6 +406,8 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           if (relative.some((path) => path.startsWith("workflow/contracts/"))) throw new Error("CONTINUOUS WORKFLOW IMPLEMENTER GATE: implementer cannot modify functional contracts")
           const branch = currentBranch(cwd)
           if (!branch || isProtectedBranch(branch)) throw new Error(`CONTINUOUS WORKFLOW IMPLEMENTER GATE: implementation on protected or unresolved branch is forbidden (${branch || "unresolved"})`)
+        } else if (isReviewer(agent)) {
+          throw new Error("CONTINUOUS WORKFLOW REVIEWER GATE: workflow-reviewer is read-only and cannot edit project files")
         }
         return
       }
@@ -407,10 +423,13 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           if (!state && !readOnlyBash(command) && !/^git\s+(switch\s+-c|checkout\s+-b)(\s|$)/.test(command)) {
             throw new Error("CONTINUOUS WORKFLOW BOOTSTRAP GATE: run workflow_state status/start before non-read-only Bash")
           }
+          if (fullSuiteCommand(command)) throw new Error("CONTINUOUS WORKFLOW VERIFICATION OWNERSHIP: workflow-lead selects and records verification; workflow-implementer runs the complete suite once after code is frozen")
         } else if (isImplementer(agent)) {
           if (/(^|\s)git\s+(push|add|commit|restore|reset|clean|stash|checkout|switch|merge|rebase|cherry-pick|revert|branch\s+-[dDmMcC])(\s|$)/.test(command)) {
             throw new Error("CONTINUOUS WORKFLOW IMPLEMENTER GATE: implementer cannot mutate Git state, history, branches, or remotes")
           }
+        } else if (isReviewer(agent) && fullSuiteCommand(command)) {
+          throw new Error("CONTINUOUS WORKFLOW VERIFICATION OWNERSHIP: workflow-reviewer must not repeat the complete suite; perform only a targeted probe when review evidence has a concrete gap")
         }
       }
     },

@@ -163,6 +163,16 @@ Before the first code mutation, present a short `Functional read-back` derived f
 
 You own the user's goal, acceptance criteria, technical decisions, current plan, reconciliation, verification, and delivery decision. The Implementer owns application-code authorship under the approved package. Consultants and reviewers advise you; they do not own the change and cannot advance its lifecycle.
 
+## Verification execution policy
+
+Verification is a planned, single-owner activity, not an expensive ritual repeated by every role. Before transitioning to implementation, record `workflow_state operation: verification_plan` with: the tier (`focused` or `complete`), the reason for the tier, and the exact required checks. `workflow-implementer` is always the execution owner.
+
+- Default to `focused`: affected tests, relevant lint/type/static checks, and the smallest functional evidence that proves the contract.
+- Select `complete` only when the project rules require it or the change affects migrations/DB models, shared schemas or API contracts, authentication/authorization/multitenancy, central accounting logic, dependencies/infrastructure, test or CI configuration, a reproduced CI failure, or the user explicitly asks for it. State the concrete trigger in the recorded reason.
+- Do not run the complete suite yourself. You select it, inspect its evidence, and record it; the Implementer runs it once after all planned code/test edits are frozen for that candidate fingerprint.
+- Do not use a complete suite as a substitute for targeted functional verification. If code changes after verification, return to planning, record a new plan for the new candidate, and let the Implementer rerun only what that new plan requires.
+- The independent reviewer must not repeat the complete suite. It may run a narrowly targeted probe only when it identifies a concrete evidence gap, and must report that gap and probe.
+
 Before any mutating work:
 
 1. Call `workflow_state` with `operation: "status"`.

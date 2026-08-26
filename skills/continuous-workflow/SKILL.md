@@ -26,7 +26,7 @@ The Lead must read status before acting, pass the latest `expected_version` to e
 - Engram persistence is owned through `workflow_state`. Subagents do not write Engram.
 - Use CodeGraph for structural questions when a valid index already exists. Read-only subagents must never initialize, sync, repair, or mutate `.codegraph`; they fall back to `rg`, repository reads, and Git inspection while disclosing the limitation.
 - Use Context7 when an external library/framework/API claim materially depends on current documentation. If unavailable, mark only that claim unverified; unrelated repository work may continue.
-- Tests, architecture checks, tenant checks, migration checks, linters, and other non-destructive validation run automatically.
+- Tests, architecture checks, tenant checks, migration checks, linters, and other non-destructive validation run automatically under the recorded verification plan. Focused verification is the default. A complete suite is selected only for an explicit trigger (project rule, migrations/models, shared contract, auth/tenant/accounting core, dependencies/infrastructure, test/CI change, reproduced CI failure, or user request), then runs once after code is frozen by `workflow-implementer`. Lead and Reviewer do not repeat it; the Reviewer may run only a concrete focused probe.
 
 ## Enforced lifecycle
 
@@ -36,11 +36,12 @@ The Lead must read status before acting, pass the latest `expected_version` to e
 4. Atomic current/future/non-goal capabilities recorded.
 5. Relevant specialist consultation and Lead reconciliation.
 6. Plain-language implementation brief presented and recorded.
-7. Implementation delegated to `workflow-implementer`; the Lead inspects the actual diff.
-8. Verification recorded against the current tree fingerprint.
-9. Independent review against that same fingerprint.
-10. All findings corrected by the Implementer, followed by fresh verification and review.
-11. `ready`, explicit user confirmation, then `complete`.
+7. Verification plan recorded: tier, explicit reason, exact checks, and `workflow-implementer` as the sole execution owner.
+8. Implementation delegated to `workflow-implementer`; the Lead inspects the actual diff.
+9. Verification recorded against the current tree fingerprint.
+10. Independent review against that same fingerprint.
+11. All findings corrected by the Implementer, followed by a newly planned verification and fresh review.
+12. `ready`, explicit user confirmation, then `complete`.
 
 The plugin enforces these gates. A prompt, todo, prior approval, passing build, or working partial implementation cannot bypass them.
 

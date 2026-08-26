@@ -14,6 +14,7 @@ import { spawn, spawnSync } from "node:child_process"
 import {
   DELIVERY_STRATEGIES,
   PHASES,
+  VERIFICATION_TIERS,
   WORKFLOW_SCHEMA,
   currentBranch,
   expectedContractPath,
@@ -345,7 +346,7 @@ const findingSchema = tool.schema.object({
 export default tool({
   description: "Manage Continuous Workflow v2. Contract, delivery, implementation, verification, review, and completion gates are typed and enforced; only workflow-lead may mutate canonical state.",
   args: {
-    operation: tool.schema.enum(["start", "status", "claim", "recover", "delivery_prepare", "contract_draft", "contract_approve", "capabilities_record", "brief_present", "transition", "checkpoint", "consultation", "verification_record", "review_record", "ready", "complete", "reopen", "abort"]),
+    operation: tool.schema.enum(["start", "status", "claim", "recover", "delivery_prepare", "contract_draft", "contract_approve", "capabilities_record", "brief_present", "verification_plan", "transition", "checkpoint", "consultation", "verification_record", "review_record", "ready", "complete", "reopen", "abort"]),
     change_id: tool.schema.string().describe("Stable change identifier"),
     goal: tool.schema.string().optional(),
     acceptance_criteria: tool.schema.array(tool.schema.string()).optional(),
@@ -361,6 +362,9 @@ export default tool({
     branch: tool.schema.string().optional(),
     base_branch: tool.schema.string().optional(),
     capabilities: tool.schema.array(capabilitySchema).optional(),
+    verification_tier: tool.schema.enum(VERIFICATION_TIERS).optional(),
+    verification_reason: tool.schema.string().optional(),
+    verification_required_checks: tool.schema.array(tool.schema.string()).optional(),
     verification_evidence: tool.schema.array(tool.schema.string()).optional(),
     review_outcome: tool.schema.enum(["passed", "blocked"]).optional(),
     findings: tool.schema.array(findingSchema).optional(),
@@ -410,6 +414,7 @@ export default tool({
           implementationBrief: { status: "missing", contractHash: "", summary: "" },
           delivery: { status: "missing", branch: "", baseBranch: "", worktree },
           capabilities: [],
+          verificationPlan: { status: "missing", owner: "", reason: "", requiredChecks: [] },
           verification: { status: "missing", treeFingerprint: "", evidence: [] },
           review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
         }
@@ -461,6 +466,7 @@ export default tool({
           state.contract = { path, version, hash: actualHash, status: "draft" }
           state.implementationBrief = { status: "missing", contractHash: "", summary: "" }
           state.capabilities = []
+          state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [] }
           state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
           state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
           state.nextAction = nextAction || "Present the complete functional contract and wait for explicit approval"
@@ -493,6 +499,17 @@ export default tool({
           if (state.capabilities.length === 0) throw new Error("record the capability matrix before presenting the brief")
           state = event(state, "implementation_brief_presented", summary || "Implementation brief presented to the user", context.agent, context.sessionID)
           state.implementationBrief = { status: "presented", contractHash: state.contract.hash, summary: brief, presentedAt: state.updatedAt }
+          state.nextAction = nextAction || "Record the verification plan, then transition to implementation and delegate the approved package to workflow-implementer"
+        } else if (operation === "verification_plan") {
+          if (state.phase !== "planning") throw new Error("verification plan can only be recorded in planning phase")
+          if (state.contract.status !== "approved") throw new Error("approve the contract before recording the verification plan")
+          if (state.implementationBrief.status !== "presented" || state.implementationBrief.contractHash !== state.contract.hash) throw new Error("present the current implementation brief before recording the verification plan")
+          const tier = args.verification_tier
+          const reason = asText(args.verification_reason)
+          const requiredChecks = (args.verification_required_checks ?? []).map(asText).filter(Boolean)
+          if (!tier || !reason || requiredChecks.length === 0) throw new Error("verification_tier, verification_reason, and verification_required_checks are required")
+          state = event(state, "verification_planned", summary || `${tier} verification planned`, context.agent, context.sessionID)
+          state.verificationPlan = { status: "planned", tier, owner: "workflow-implementer", reason, requiredChecks, plannedAt: state.updatedAt }
           state.nextAction = nextAction || "Transition to implementation and delegate the approved package to workflow-implementer"
         } else if (operation === "consultation") {
           const kind = args.consultation_kind ?? "consultation"
@@ -501,6 +518,12 @@ export default tool({
         } else if (operation === "transition") {
           if (!args.phase || !transitionAllowed(state.phase, args.phase)) throw new Error(`invalid phase transition ${state.phase} -> ${args.phase ?? "(missing)"}`)
           if (args.phase === "planning" && state.contract.status !== "approved") throw new Error("planning requires an approved contract")
+          if (args.phase === "planning" && ["implementation", "verification", "delivery"].includes(state.phase)) {
+            state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [] }
+            state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
+            state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
+            state.nextAction = nextAction || "Record a new verification plan for the next implementation candidate"
+          }
           if (args.phase === "implementation") {
             const errors = implementationGateErrors(state, worktree)
             if (errors.length) throw new Error(`implementation gate failed: ${errors.join("; ")}`)
@@ -518,6 +541,9 @@ export default tool({
           if (state.phase !== "verification") throw new Error("verification can only be recorded in verification phase")
           const evidence = (args.verification_evidence ?? []).map(asText).filter(Boolean)
           if (evidence.length === 0) throw new Error("verification_evidence is required")
+          if (state.verificationPlan.status !== "planned" || !state.verificationPlan.tier || state.verificationPlan.owner !== "workflow-implementer") throw new Error("verification requires a planned workflow-implementer verification plan")
+          const missingChecks = state.verificationPlan.requiredChecks.filter((check) => !evidence.some((item) => item.includes(check)))
+          if (missingChecks.length) throw new Error(`verification evidence is missing planned checks: ${missingChecks.join(", ")}`)
           const fingerprint = treeFingerprint(worktree)
           state = event(state, "verification_passed", summary || `${evidence.length} verification evidence item(s) recorded`, context.agent, context.sessionID)
           state.verification = { status: "passed", treeFingerprint: fingerprint, evidence, recordedAt: state.updatedAt }
@@ -548,6 +574,7 @@ export default tool({
           state.status = "active"
           state.phase = "planning"
           state.implementationBrief = { status: "missing", contractHash: "", summary: "" }
+          state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [] }
           state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
           state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
           state.nextAction = nextAction || "Reconcile the adjustment with the contract; redraft it if behavior changes, then present a new brief"

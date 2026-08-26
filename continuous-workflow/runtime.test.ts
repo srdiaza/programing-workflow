@@ -55,6 +55,7 @@ function state(cwd: string): WorkflowState {
       { id: "F1", behavior: "future path", kind: "future", status: "preserved", evidence: "design inspection" },
       { id: "N1", behavior: "excluded behavior", kind: "non-goal", status: "excluded", evidence: "diff inspection" },
     ],
+    verificationPlan: { status: "planned", tier: "focused", owner: "workflow-implementer", reason: "isolated change", requiredChecks: ["focused tests"] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
   }
@@ -86,6 +87,19 @@ describe("Continuous Workflow v2 gates", () => {
     expect(implementationGateErrors(state(cwd), cwd)).toEqual([])
     git(cwd, "branch", "-m", "main")
     expect(implementationGateErrors(state(cwd), cwd)).toContain("implementation on protected branch main is forbidden")
+  })
+
+  test("implementation requires a complete verification plan owned by the Implementer", () => {
+    const cwd = repository()
+    const candidate = state(cwd)
+    candidate.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [] }
+    expect(implementationGateErrors(candidate, cwd)).toContain("verification plan is missing, incomplete, or has no workflow-implementer owner")
+  })
+
+  test("current-schema states without a verification plan fail closed while remaining readable", () => {
+    const legacyCurrent = { ...state("/tmp/current"), verificationPlan: undefined }
+    const normalized = normalizeWorkflowState(legacyCurrent)
+    expect(normalized?.verificationPlan.status).toBe("missing")
   })
 
   test("ready evidence is invalidated by any candidate tree change", () => {
