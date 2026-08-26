@@ -222,8 +222,9 @@ function stateRequired(state: WorkflowState | undefined): WorkflowState {
 
 function approvalLooksExplicit(text: string): boolean {
   const normalized = text.trim().toLocaleLowerCase("es")
-  if (normalized === "sí" || normalized === "si") return true
-  return /^(apruebo|aprobado|confirmo|confiemo|confirmado|ok|dale)(\b|[.!,:;])/i.test(normalized)
+  if (/^(?:sí|si)$/.test(normalized)) return true
+  if (/^(?:sí|si)\s*[,;:.!?-]?\s*(?:apruebo|aprobado|confirmo|confiemo|confirmado|acepto|autorizo|ok|dale)\b/i.test(normalized)) return true
+  return /^(apruebo|aprobado|confirmo|confiemo|confirmado|acepto|autorizo|ok|dale)(\b|[.!,:;])/i.test(normalized)
 }
 
 function readOnlyBash(command: string): boolean {
@@ -310,8 +311,10 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
     },
 
     "chat.message": async (input, output) => {
-      if (input.agent) agents.set(input.sessionID, input.agent)
-      if (isLead(input.agent)) {
+      const messageAgent = typeof output?.message?.agent === "string" ? output.message.agent : undefined
+      const agent = input.agent || messageAgent || agents.get(input.sessionID)
+      if (agent) agents.set(input.sessionID, agent)
+      if (isLead(agent)) {
         const confirmation = { text: userText(output), at: Date.now() }
         lastUserMessages.set(input.sessionID, confirmation)
         const current = states.get(input.sessionID)

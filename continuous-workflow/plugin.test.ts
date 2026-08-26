@@ -357,7 +357,7 @@ describe("Continuous Workflow plugin enforcement", () => {
     const input = { tool: "workflow_state", sessionID: "lead", callID: "approve" }
     const output = { args: { operation: "contract_approve" } }
     await expect(plugin["tool.execute.before"](input, output)).rejects.toThrow("explicit user response")
-    await identify(plugin, "lead", "workflow-lead", "Apruebo este contrato")
+    await identify(plugin, "lead", "workflow-lead", "Sí, apruebo")
     await expect(plugin["tool.execute.before"](input, output)).resolves.toBeUndefined()
 
     await identify(plugin, "lead", "workflow-lead", "CONFIEMO")
@@ -404,5 +404,26 @@ describe("Continuous Workflow plugin enforcement", () => {
       else process.env.CONTINUOUS_WORKFLOW_STATE_DIR = priorStateRoot
       rmSync(receiptStateRoot, { recursive: true, force: true })
     }
+  })
+
+  test("captures approval when OpenCode provides the agent on the user message", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    const draft = state(repo.cwd, repo.contractHash, "planning")
+    draft.contract.status = "draft"
+    draft.updatedAt = new Date().toISOString()
+    await plugin["tool.execute.after"](
+      { tool: "workflow_state", sessionID: "lead", agent: "workflow-lead", callID: "state" },
+      { output: JSON.stringify(draft) },
+    )
+
+    await plugin["chat.message"](
+      { sessionID: "lead" },
+      { message: { agent: "workflow-lead" }, parts: [{ type: "text", text: "Sí, apruebo" }] },
+    )
+    await expect(plugin["tool.execute.before"](
+      { tool: "workflow_state", sessionID: "lead", callID: "approve-message-agent" },
+      { args: { operation: "contract_approve" } },
+    )).resolves.toBeUndefined()
   })
 })
