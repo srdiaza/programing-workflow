@@ -217,28 +217,38 @@ function persistedVerificationReceipt(state: WorkflowState, worktree: string, fi
   }
 }
 
-function userConfirmationPath(state: WorkflowState, worktree: string): string {
+function userConfirmationPath(state: WorkflowState): string {
+  const stateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+    || `${process.env.XDG_STATE_HOME || `${process.env.HOME || "/tmp"}/.local/share`}/opencode/continuous-workflow`
+  const key = createHash("sha256").update(JSON.stringify({ project: state.project, changeId: state.changeId })).digest("hex")
+  return `${stateRoot}/user-confirmations/${key}.json`
+}
+
+function legacyUserConfirmationPath(state: WorkflowState, worktree: string): string {
   const stateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
     || `${process.env.XDG_STATE_HOME || `${process.env.HOME || "/tmp"}/.local/share`}/opencode/continuous-workflow`
   const key = createHash("sha256").update(JSON.stringify({ worktree, changeId: state.changeId })).digest("hex")
   return `${stateRoot}/user-confirmations/${key}.json`
 }
 
-function persistUserConfirmation(state: WorkflowState, worktree: string, confirmation: UserConfirmation): void {
+function persistUserConfirmation(state: WorkflowState, confirmation: UserConfirmation): void {
   try {
-    const path = userConfirmationPath(state, worktree)
+    const path = userConfirmationPath(state)
     mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true })
     writeFileSync(path, JSON.stringify(confirmation), "utf8")
   } catch {}
 }
 
 function persistedUserConfirmation(state: WorkflowState, worktree: string): UserConfirmation | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(userConfirmationPath(state, worktree), "utf8"))
-    return typeof parsed?.text === "string" && typeof parsed?.at === "number" ? parsed as UserConfirmation : undefined
-  } catch {
-    return undefined
+  const candidates: UserConfirmation[] = []
+  for (const path of [userConfirmationPath(state), legacyUserConfirmationPath(state, worktree)]) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf8"))
+      if (typeof parsed?.text === "string" && typeof parsed?.at === "number") candidates.push(parsed as UserConfirmation)
+    } catch {}
   }
+  candidates.sort((a, b) => b.at - a.at)
+  return candidates[0]
 }
 
 function stateRequired(state: WorkflowState | undefined): WorkflowState {
@@ -347,7 +357,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         const confirmation = { text: userText(output), at: Date.now() }
         lastUserMessages.set(input.sessionID, confirmation)
         const current = states.get(input.sessionID)
-        if (current && approvalLooksExplicit(confirmation.text)) persistUserConfirmation(current, cwd, confirmation)
+        if (current && approvalLooksExplicit(confirmation.text)) persistUserConfirmation(current, confirmation)
       }
     },
 

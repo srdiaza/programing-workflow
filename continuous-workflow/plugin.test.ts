@@ -464,6 +464,33 @@ describe("Continuous Workflow plugin enforcement", () => {
     }
   })
 
+  test("explicit user approval survives plugin recreation with a different context path", async () => {
+    const repo = repository()
+    const receiptStateRoot = mkdtempSync(`${tmpdir()}/continuous-workflow-confirmation-identity-`)
+    const priorStateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+    process.env.CONTINUOUS_WORKFLOW_STATE_DIR = receiptStateRoot
+    try {
+      const plugin = await hooks(repo.cwd)
+      await identify(plugin, "lead", "workflow-lead")
+      const draft = state(repo.cwd, repo.contractHash, "planning")
+      draft.contract.status = "draft"
+      draft.updatedAt = new Date().toISOString()
+      await cacheState(plugin, "lead", draft)
+      await identify(plugin, "lead", "workflow-lead", "Confirmo")
+
+      const recreated = await ContinuousWorkflow({ directory: `${repo.cwd}/different-plugin-context` } as any)
+      await cacheState(recreated, "lead", draft)
+      await expect(recreated["tool.execute.before"](
+        { tool: "workflow_state", sessionID: "lead", callID: "approve-after-recreate" },
+        { args: { operation: "contract_approve" } },
+      )).resolves.toBeUndefined()
+    } finally {
+      if (priorStateRoot === undefined) delete process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+      else process.env.CONTINUOUS_WORKFLOW_STATE_DIR = priorStateRoot
+      rmSync(receiptStateRoot, { recursive: true, force: true })
+    }
+  })
+
   test("captures approval when OpenCode provides the agent on the user message", async () => {
     const repo = repository()
     const plugin = await hooks(repo.cwd)
