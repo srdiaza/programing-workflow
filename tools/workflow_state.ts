@@ -346,7 +346,7 @@ const findingSchema = tool.schema.object({
 export default tool({
   description: "Manage Continuous Workflow v2. Contract, delivery, implementation, verification, review, and completion gates are typed and enforced; only workflow-lead may mutate canonical state.",
   args: {
-    operation: tool.schema.enum(["start", "status", "claim", "recover", "delivery_prepare", "contract_draft", "contract_approve", "contract_metadata_reconcile", "capabilities_record", "brief_present", "verification_plan", "transition", "checkpoint", "consultation", "verification_record", "review_record", "ready", "complete", "reopen", "abort"]),
+    operation: tool.schema.enum(["start", "status", "claim", "recover", "delivery_prepare", "contract_draft", "contract_approve", "contract_metadata_reconcile", "capabilities_record", "capabilities_evidence", "brief_present", "verification_plan", "transition", "checkpoint", "consultation", "verification_record", "review_record", "ready", "complete", "reopen", "abort"]),
     change_id: tool.schema.string().describe("Stable change identifier"),
     goal: tool.schema.string().optional(),
     acceptance_criteria: tool.schema.array(tool.schema.string()).optional(),
@@ -504,6 +504,26 @@ export default tool({
           state = event(state, "capabilities_recorded", summary || `${capabilities.length} contract capabilities recorded`, context.agent, context.sessionID)
           state.capabilities = capabilities
           state.nextAction = nextAction || "Consult specialists when needed, reconcile their findings, and present the implementation brief"
+        } else if (operation === "capabilities_evidence") {
+          if (state.phase !== "verification" && state.phase !== "delivery") throw new Error("capability evidence can only be recorded in verification or delivery phase")
+          const evidence = (args.capabilities ?? []) as Capability[]
+          if (state.capabilities.length === 0) throw new Error("record the capability matrix before recording evidence")
+          if (evidence.length !== state.capabilities.length) throw new Error("capability evidence must cover every recorded capability exactly once")
+          const priorById = new Map(state.capabilities.map((capability) => [capability.id, capability]))
+          const seen = new Set<string>()
+          for (const capability of evidence) {
+            const prior = priorById.get(capability.id)
+            if (!prior || seen.has(capability.id)) throw new Error("capability evidence must use each existing capability ID exactly once")
+            seen.add(capability.id)
+            if (capability.kind !== prior.kind || capability.behavior !== prior.behavior) throw new Error(`capability evidence cannot change scope for ${capability.id}`)
+            if (!asText(capability.evidence)) throw new Error(`capability evidence is required for ${capability.id}`)
+            if (capability.kind === "current" && capability.status !== "verified") throw new Error(`current capability ${capability.id} must be verified or the change remains blocked`)
+            if (capability.kind === "future" && capability.status !== "preserved") throw new Error(`future capability ${capability.id} must be confirmed as preserved or the change remains blocked`)
+            if (capability.kind === "non-goal" && capability.status !== "excluded") throw new Error(`non-goal ${capability.id} must be confirmed as excluded or the change remains blocked`)
+          }
+          state = event(state, "capabilities_evidence_recorded", summary || `${evidence.length} capability evidence item(s) recorded`, context.agent, context.sessionID)
+          state.capabilities = evidence
+          state.nextAction = nextAction || "Record or inspect independent review, then request ready when its receipt passes"
         } else if (operation === "brief_present") {
           if (state.contract.status !== "approved") throw new Error("approve the contract before presenting the implementation brief")
           const brief = asText(args.brief_summary)

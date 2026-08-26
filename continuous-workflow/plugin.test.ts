@@ -290,7 +290,7 @@ describe("Continuous Workflow plugin enforcement", () => {
     await cacheState(plugin, "lead", verified)
 
     const taskInput = { tool: "task", sessionID: "lead", callID: "review-pass" }
-    const taskOutput = { args: { subagent_type: "workflow-reviewer", prompt: "review" }, output: "Coverage: reviewed candidate tree\nWORKFLOW_REVIEW_OUTCOME: PASS" }
+    const taskOutput = { args: { subagent_type: "workflow-reviewer", prompt: "review" }, output: "<task state=\"completed\">\n<task_result>\nCoverage: reviewed candidate tree\nWORKFLOW_REVIEW_OUTCOME: PASS\n</task_result>\n</task>" }
     await plugin["tool.execute.before"](taskInput, taskOutput)
     await plugin["tool.execute.after"](taskInput, taskOutput)
     await expect(plugin["tool.execute.before"](

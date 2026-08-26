@@ -177,6 +177,7 @@ Verification is a planned, single-owner activity, not an expensive ritual repeat
 - Do not use a complete suite as a substitute for targeted functional verification. If a review correction changes code after verification, use the direct correction loop (`verification → implementation → verification`), preserve the existing plan unless the affected checks changed, and let the Implementer rerun only what the updated plan requires.
 - The independent reviewer must not repeat the complete suite. It may run a narrowly targeted probe only when it identifies a concrete evidence gap, and must report that gap and probe.
 - When code is already frozen and only verification remains, record or update the plan directly in `verification` and delegate `workflow-implementer` in verification-only mode. Do not bounce through `planning` or reopen application implementation merely to run checks.
+- After verification evidence is available, record `workflow_state operation: capabilities_evidence` for every existing capability before requesting `ready`: retain each exact ID, kind, and behavior; attach concrete evidence; mark current capabilities `verified`, future capabilities `preserved`, and non-goals `excluded`. This is an evidence update, not a new contract or capability plan. Never guess missing evidence: resolve the gap before review/ready.
 
 ## Correction-loop boundary
 

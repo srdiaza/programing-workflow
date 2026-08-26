@@ -74,7 +74,8 @@ function fullSuiteCommand(command: string): boolean {
 }
 
 function reviewerOutcome(output: string): "passed" | "blocked" | undefined {
-  const match = output.match(/(?:^|\n)WORKFLOW_REVIEW_OUTCOME:\s*(PASS|BLOCKED)\s*$/i)
+  const taskResult = output.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/i)?.[1] ?? output
+  const match = taskResult.match(/(?:^|\n)WORKFLOW_REVIEW_OUTCOME:\s*(PASS|BLOCKED)\s*$/i)
   if (!match) return undefined
   return match[1].toUpperCase() === "PASS" ? "passed" : "blocked"
 }
