@@ -182,14 +182,19 @@ describe("Continuous Workflow plugin enforcement", () => {
     )).resolves.toBeUndefined()
   })
 
-  test("artifact cleanup cannot be delegated to make a review pass", async () => {
+  test("artifact safety blocks file-moving commands without rejecting a verification task", async () => {
     const repo = repository()
     const plugin = await hooks(repo.cwd)
     await identify(plugin, "lead", "workflow-lead")
     await cacheState(plugin, "lead", state(repo.cwd, repo.contractHash))
     await expect(plugin["tool.execute.before"](
       { tool: "task", sessionID: "lead", callID: "cleanup" },
-      { args: { subagent_type: "workflow-implementer", prompt: "isolate unrelated artifacts from the worktree" } },
+      { args: { subagent_type: "workflow-implementer", prompt: "run final verification; do not move, delete, stash, restore, or isolate files" } },
+    )).resolves.toBeUndefined()
+    await identify(plugin, "implementer", "workflow-implementer")
+    await expect(plugin["tool.execute.before"](
+      { tool: "bash", sessionID: "implementer", callID: "move" },
+      { args: { command: "mv backend/uploads/test.pdf /tmp/test.pdf" } },
     )).rejects.toThrow("ARTIFACT SAFETY")
   })
 

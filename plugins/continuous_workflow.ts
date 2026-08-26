@@ -370,9 +370,6 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: SDD, Gentle AI, and OpenSpec subagents are forbidden")
         }
         const base = baseAgent(requested)
-        if (base === IMPLEMENTER && /\b(?:isolate|clean(?:up)?|stash|restore|relocate|move)\b.*\b(?:artifact|unrelated|worktree|upload|backup)/i.test(String(output.args?.prompt ?? ""))) {
-          throw new Error("CONTINUOUS WORKFLOW ARTIFACT SAFETY: do not move, delete, stash, restore, or isolate files to satisfy review; record expected test artifact paths in verification_plan instead")
-        }
         const fingerprint = workflowFingerprint(current, cwd)
         const key = `${input.sessionID}:${input.callID}`
 
@@ -440,6 +437,9 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         } else if (isImplementer(agent)) {
           if (/(^|\s)git\s+(push|add|commit|restore|reset|clean|stash|checkout|switch|merge|rebase|cherry-pick|revert|branch\s+-[dDmMcC])(\s|$)/.test(command)) {
             throw new Error("CONTINUOUS WORKFLOW IMPLEMENTER GATE: implementer cannot mutate Git state, history, branches, or remotes")
+          }
+          if (/(^|[;&|]\s*)(?:rm|mv)\s/.test(command)) {
+            throw new Error("CONTINUOUS WORKFLOW ARTIFACT SAFETY: implementer cannot delete or move project files to satisfy verification or review")
           }
         } else if (isReviewer(agent) && fullSuiteCommand(command)) {
           throw new Error("CONTINUOUS WORKFLOW VERIFICATION OWNERSHIP: workflow-reviewer must not repeat the complete suite; perform only a targeted probe when review evidence has a concrete gap")
