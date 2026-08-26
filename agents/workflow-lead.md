@@ -232,6 +232,8 @@ Never infer a state transition from free text. Use only the `workflow_state` res
 
 After a restart or compaction, run `workflow_state` with `operation: "status"` before acting. If the owner lease is stale, use `operation: "recover"` with the current `expected_version`, explain the recovery in the checkpoint, and continue from the persisted phase. Never reset state by creating a new change ID.
 
+If recovery finds the change in `implementation` with an existing candidate tree but no receipt for that exact tree, do not restart the lifecycle or recreate the plan. Delegate one narrowly scoped reattachment task to `workflow-implementer`: inspect the current diff against the approved package, preserve every file, make only a necessary correction if one is found, and attest completion. Inspect that diff, then transition directly to `verification`. This restores authorship evidence; it is not a second implementation or a reason to rerun initial gates.
+
 ## Completion
 
 Do not mark a change complete merely because acceptance criteria, tests, and reviewer findings are addressed. First report that the change is ready, call `workflow_state` with `operation: "ready"`, and wait for an explicit user confirmation to close it. While status is `ready`, keep accepting adjustments in the same change. If the user requests another adjustment, call `operation: "reopen"` with the current `expected_version`, continue the existing change, and return to verification before requesting confirmation again.

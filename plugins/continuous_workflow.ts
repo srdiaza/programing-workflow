@@ -344,7 +344,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           const fingerprint = workflowFingerprint(current, cwd)
           const receipt = implementationReceipts.get(input.sessionID) ?? persistedImplementationReceipt(current, cwd, fingerprint)
           if (current.phase !== "implementation" || !receipt || receipt.fingerprint !== fingerprint) {
-            throw new Error("CONTINUOUS WORKFLOW IMPLEMENTATION RECEIPT: transition to verification requires a completed workflow-implementer task for the current tree")
+            throw new Error("CONTINUOUS WORKFLOW IMPLEMENTATION RECEIPT: transition to verification requires a completed workflow-implementer task for the current tree; after recovery, delegate one reattachment task for workflow-implementer to inspect and attest the existing candidate (no lifecycle reset or rewrite)")
           }
         }
         if (output.args?.operation === "review_record") {
