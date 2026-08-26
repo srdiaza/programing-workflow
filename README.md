@@ -1,6 +1,6 @@
 # Programing Workflow
 
-An independent, selectable workflow for OpenCode. It gives one Lead ownership of the goal, plan, implementation, verification, recovery, and delivery while read-only specialists provide evidence-backed advice.
+An independent, selectable workflow for OpenCode. The Lead owns product fidelity, technical decisions, reconciliation, verification, recovery, and delivery. A constrained Implementer is the only application-code writer, while specialists and the Reviewer remain read-only.
 
 ## First use — step by step
 
@@ -28,6 +28,7 @@ workflow-ai configure
 It asks which model should be used for:
 
 - the Lead, who owns the complete change;
+- the Implementer, who writes code and tests only after the functional gates pass;
 - discovery and architecture;
 - frontend and backend work;
 - security and reliability;
@@ -54,6 +55,7 @@ Al guardar se generan agentes globales independientes:
 
 ```text
 workflow-lead-deepseek
+workflow-implementer-deepseek
 workflow-discovery-deepseek
 workflow-architecture-deepseek
 workflow-frontend-deepseek
@@ -84,14 +86,14 @@ The configuration opens as a full-screen terminal interface. The left panel cont
 
 The **Permisos** section controls the Lead of the profile currently being edited:
 
-- **Edición de archivos** — whether the Lead may edit without approval (`allow`), must ask (`ask`), or is blocked (`deny`).
+- **Edición de archivos** — whether the Lead may write its exact functional contract without approval (`allow`), must ask (`ask`), or is blocked (`deny`). The plugin never permits the Lead to edit application code.
 - **Comandos shell** — the same policy for Bash commands. `git reset --hard`, destructive clean, `rm -rf`, and `sudo` remain blocked by the workflow's hard safety rules.
 - **Git push** — whether a push asks for your approval (`ask`) or remains blocked (`deny`). It is `ask` by default.
-- **Subagentes** — whether the approved `workflow-*` consultants and reviewer run automatically, ask first, or are disabled.
+- **Subagentes** — whether the approved `workflow-*` Implementer, consultants, specialists, and Reviewer run automatically, ask first, or are disabled.
 - **Fuera del proyecto** — access to directories outside the project. The workflow state directory remains available so recovery continues to work.
 - **Preguntas interactivas** — whether the Lead may pause and present a question with options. Set this to `deny` for truly unattended runs.
 
-The defaults preserve normal interactive behavior: editing is automatic, shell and external-directory access ask, `git push` asks, approved subagents run automatically, and the Lead may ask questions. The settings are stored under `permissions` for the default profile or under the selected entry in `profiles` in `~/.config/opencode/continuous-workflow/config.json`; they do not change global OpenCode permissions.
+The defaults preserve normal interactive behavior: contract editing is automatic, shell access asks, general external-directory access is denied, `git push` asks, approved subagents run automatically, and the Lead may ask questions. Workflow-owned external directories remain available. The settings are stored under `permissions` for the default profile or under the selected entry in `profiles` in `~/.config/opencode/continuous-workflow/config.json`; they do not change unrelated OpenCode permissions.
 
 ### 3. Open a project and select the Lead
 
@@ -125,13 +127,14 @@ For a larger request, include the desired result, important constraints, and how
 
 For the first request in a project, the Lead works through these stages:
 
-1. **Discovery** — reads the project instructions, local skills, architecture, tests, and relevant existing code. It also loads useful prior context from Engram and uses CodeGraph to understand the repository structure.
-2. **Planning** — defines a stable change ID, the goal, acceptance criteria, boundaries, and the next action.
-3. **Consultation** — asks the relevant area specialists for independent findings when the configured policy or risk requires it.
-4. **Implementation** — the Lead makes the changes. Specialists advise; the Lead remains responsible for the actual edit.
-5. **Verification** — runs the appropriate tests and checks, uses Context7 for current library documentation when an external API is involved, and asks the reviewer for an independent review when required.
-6. **Ready** — reports what is finished and waits for your confirmation. A ready change is still open, so you can request corrections or additional tests without starting a new workflow.
-7. **Completed** — only happens after you explicitly confirm that the change should be closed.
+1. **Discovery and delivery setup** — reads the project rules and current behavior, then prepares a non-protected branch/worktree. Implementation on `main` or `master` is forbidden.
+2. **Functional contract** — writes `workflow/contracts/<change-id>.md` in business language, presents the complete version, and waits for explicit user approval of its exact hash.
+3. **Capabilities and consultation** — separates every current behavior, future direction, and non-goal into observable capabilities, then asks relevant read-only specialists for evidence.
+4. **Implementation brief** — explains what will change, remain possible, stay excluded, and how each capability will be proven.
+5. **Implementation** — delegates the approved package to `workflow-implementer`. The Lead cannot edit application code and must inspect the resulting diff.
+6. **Verification and review** — records test and functional evidence for the current tree fingerprint, then delegates an independent review of that same tree.
+7. **Correction loop** — every concrete finding blocks delivery, regardless of severity or whether it was pre-existing. Corrections return to the Implementer and require fresh verification and review.
+8. **Ready and Completed** — `ready` waits for explicit user confirmation; `complete` is allowed only afterward.
 
 The state and checkpoints are kept in Engram, so a restart or compaction does not make the Lead start from memory alone.
 
@@ -184,13 +187,14 @@ The Lead normally creates or derives the change ID. You can request a clear one 
 
 ## What each part does
 
-- **workflow-lead** — the only agent that owns the goal, plan, edits, verification, and decision to request completion.
+- **workflow-lead** — owns functional scope, technical decisions, canonical state, reconciliation, verification, and the decision to request completion. It writes only the functional contract.
+- **workflow-implementer** — the only agent allowed to write application code and tests. It cannot change scope, workflow state, branches, commits, stashes, or remotes.
 - **workflow-consultant and area specialists** — read-only advisors for discovery, architecture, frontend, backend, security, and reliability.
-- **workflow-reviewer** — an independent review pass when the review policy requires it.
+- **workflow-reviewer** — an independent read-only review of the already verified candidate tree. `PASS` requires zero concrete findings.
 - **Engram** — stores durable memory, ownership, checkpoints, and recovery state across sessions.
 - **CodeGraph** — maps repository structure, symbols, callers, callees, and impact before broad searches.
 - **Context7** — supplies current documentation for libraries, frameworks, and external APIs.
-- **workflow_state** — the canonical state machine. It tracks phase, owner, version, next action, consultations, and history.
+- **workflow_state** — the canonical v2 state machine. It binds contract approval, delivery topology, capabilities, implementation brief, verification, and review to exact versions and tree fingerprints.
 
 ## Required tools and dependency updates
 
@@ -214,9 +218,9 @@ The workflow-only settings live at:
 ~/.config/opencode/continuous-workflow/config.json
 ```
 
-This file contains the default Lead model, area model map, reviewer model, consultation/review policies, Engram endpoint, and independent profile entries. It is synchronized only into generated `workflow-*` agents. A profile inherits the default when created, then becomes its own saved snapshot when configured.
+This file contains separate Lead and Implementer models, the area model map, reviewer model, thinking variants, consultation/review policies, Engram endpoint, permissions, and independent profile entries. Older configurations without Implementer fields inherit the Lead model once, preserving compatibility. It is synchronized only into generated `workflow-*` agents.
 
-The thinking choices are stored beside those model assignments as `lead_variant`, `area_variants`, and `reviewer_variant`. A `default` value leaves the model's native OpenCode behavior unchanged; a named value is written as that agent's OpenCode `variant`.
+The thinking choices are stored beside those model assignments as `lead_variant`, `implementer_variant`, `area_variants`, and `reviewer_variant`. A `default` value leaves the model's native OpenCode behavior unchanged; a named value is written as that agent's OpenCode `variant`.
 
 To apply a hand-edited configuration without changing models, run:
 
@@ -226,7 +230,7 @@ workflow-ai sync
 
 ## Project setup and recovery
 
-There is no mandatory project-specific initialization command. On the first request, the Lead reads the project's own `AGENTS.md`, rules, skills, architecture, and tests. CodeGraph initializes its project index when needed. Project-specific files stay in the project; workflow state stays in Engram.
+There is no mandatory project-specific initialization command. On the first request, the Lead reads the project's own `AGENTS.md`, rules, architecture, tests, and current Git state. Read-only subagents use an existing CodeGraph index when available and fall back to repository evidence without mutating `.codegraph`. Project-specific files stay in the project; workflow state stays in Engram.
 
 After a restart, use:
 

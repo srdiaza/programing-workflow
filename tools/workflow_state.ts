@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { createHash } from "node:crypto"
 import {
   accessSync,
   constants as fsConstants,
@@ -10,62 +11,29 @@ import {
   writeFileSync,
 } from "node:fs"
 import { spawn, spawnSync } from "node:child_process"
+import {
+  DELIVERY_STRATEGIES,
+  PHASES,
+  WORKFLOW_SCHEMA,
+  currentBranch,
+  expectedContractPath,
+  implementationGateErrors,
+  isProtectedBranch,
+  normalizeWorkflowState,
+  readyGateErrors,
+  treeFingerprint,
+  type Capability,
+  type Finding,
+  type Owner,
+  type Phase,
+  type WorkflowState,
+} from "../continuous-workflow/runtime"
 
 const WORKFLOW_AGENT = "workflow-lead"
 const WORKFLOW_AGENT_PREFIX = "workflow-lead-"
-const WORKFLOW_SCHEMA = "continuous-workflow/v1"
 const DEFAULT_LEASE_MS = 30 * 60 * 1000
 const LOCK_WAIT_MS = 250
 const LOCK_STALE_MS = 2 * DEFAULT_LEASE_MS
-
-const PHASES = ["discovery", "planning", "implementation", "verification", "delivery"] as const
-const STATUSES = ["active", "ready", "completed", "blocked", "aborted"] as const
-type Phase = (typeof PHASES)[number]
-type Status = (typeof STATUSES)[number]
-
-type Owner = {
-  agent: string
-  sessionID: string
-  claimedAt: string
-  lastSeenAt: string
-  leaseUntil: string
-}
-
-type HistoryEntry = {
-  version: number
-  event: string
-  summary: string
-  actor: string
-  sessionID: string
-  at: string
-}
-
-type Consultation = {
-  kind: "consultation" | "review"
-  actor: string
-  sessionID: string
-  summary: string
-  at: string
-}
-
-type WorkflowState = {
-  schema: typeof WORKFLOW_SCHEMA
-  changeId: string
-  project: string
-  worktree: string
-  goal: string
-  acceptanceCriteria: string[]
-  phase: Phase
-  status: Status
-  /** Profile selected by the owning Lead; absent means the legacy default. */
-  profile?: string
-  version: number
-  owner: Owner
-  nextAction: string
-  updatedAt: string
-  history: HistoryEntry[]
-  consultations: Consultation[]
-}
 
 type Observation = {
   id?: number
@@ -84,11 +52,10 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
 }
 
-/**
- * OpenCode executes tools in its own runtime and does not guarantee Bun's
- * globals. Keep process discovery and filesystem operations on Node's
- * standard APIs, which are available in the OpenCode plugin runtime.
- */
+function pathJoin(...parts: string[]): string {
+  return parts.join("/").replace(/\/+/g, "/").replace(/\/$/, "")
+}
+
 function commandSync(command: string, args: string[]): { exitCode: number; stdout: string; stderr: string } {
   try {
     const result = spawnSync(command, args, { stdio: ["ignore", "pipe", "pipe"] })
@@ -111,7 +78,6 @@ function executablePath(command: string): string | undefined {
       return undefined
     }
   }
-
   for (const directory of (process.env.PATH ?? "").split(":")) {
     if (!directory) continue
     const candidate = pathJoin(directory, command)
@@ -132,37 +98,27 @@ function safeChangeId(value: string): string {
 }
 
 function projectFrom(directory: string): string {
-  try {
-    const remote = commandSync("git", ["-C", directory, "remote", "get-url", "origin"])
-    if (remote.exitCode === 0) {
-      const value = remote.stdout.toString().trim().replace(/\.git$/, "")
-      const name = value.split(/[/:]/).pop()
-      if (name) return name
-    }
-  } catch {}
-
-  try {
-    const root = commandSync("git", ["-C", directory, "rev-parse", "--show-toplevel"])
-    if (root.exitCode === 0) {
-      const value = root.stdout.toString().trim()
-      const name = value.split("/").pop()
-      if (name) return name
-    }
-  } catch {}
-
+  const remote = commandSync("git", ["-C", directory, "remote", "get-url", "origin"])
+  if (remote.exitCode === 0) {
+    const value = remote.stdout.trim().replace(/\.git$/, "")
+    const name = value.split(/[/:]/).pop()
+    if (name) return name
+  }
+  const root = commandSync("git", ["-C", directory, "rev-parse", "--show-toplevel"])
+  if (root.exitCode === 0) {
+    const name = root.stdout.trim().split("/").pop()
+    if (name) return name
+  }
   return directory.split("/").filter(Boolean).pop() ?? "unknown-project"
 }
 
 function stateRoot(): string {
-  const configured = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
-  if (configured) return configured
-  const home = process.env.HOME ?? "/tmp"
-  return pathJoin(home, ".local", "share", "opencode", "continuous-workflow")
+  if (process.env.CONTINUOUS_WORKFLOW_STATE_DIR) return process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+  return pathJoin(process.env.HOME ?? "/tmp", ".local", "share", "opencode", "continuous-workflow")
 }
 
 function runtimeConfig(): Record<string, unknown> {
-  const home = process.env.HOME ?? "/tmp"
-  const configured = process.env.CONTINUOUS_WORKFLOW_CONFIG ?? pathJoin(home, ".config", "opencode", "continuous-workflow", "config.json")
+  const configured = process.env.CONTINUOUS_WORKFLOW_CONFIG ?? pathJoin(process.env.HOME ?? "/tmp", ".config", "opencode", "continuous-workflow", "config.json")
   try {
     const parsed = JSON.parse(readFileSync(configured, "utf8"))
     return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {}
@@ -172,8 +128,7 @@ function runtimeConfig(): Record<string, unknown> {
 }
 
 function engramBaseUrl(): string {
-  const explicit = process.env.ENGRAM_URL
-  if (explicit) return explicit.replace(/\/$/, "")
+  if (process.env.ENGRAM_URL) return process.env.ENGRAM_URL.replace(/\/$/, "")
   const configured = runtimeConfig().engram_url
   if (typeof configured === "string" && configured.trim()) return configured.trim().replace(/\/$/, "")
   const port = Number.parseInt(process.env.ENGRAM_PORT ?? "7437", 10)
@@ -182,19 +137,13 @@ function engramBaseUrl(): string {
 
 function engramIsLocal(): boolean {
   try {
-    const hostname = new URL(engramBaseUrl()).hostname
-    return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1"
+    return ["127.0.0.1", "localhost", "::1"].includes(new URL(engramBaseUrl()).hostname)
   } catch {
     return false
   }
 }
 
-function pathJoin(...parts: string[]): string {
-  return parts.join("/").replace(/\/+/g, "/").replace(/\/\/$/, "")
-}
-
 function topicFor(changeId: string): string {
-  // Engram's portable topic convention is family/name (two levels).
   return `workflow/${changeId}`
 }
 
@@ -211,12 +160,8 @@ async function engramFetch(path: string, options: { method?: string; body?: unkn
   })
   const text = await response.text()
   let body: any = text
-  try {
-    body = text ? JSON.parse(text) : null
-  } catch {}
-  if (!response.ok) {
-    throw new Error(`Engram ${options.method ?? "GET"} ${path} failed (${response.status}): ${typeof body === "string" ? body : JSON.stringify(body)}`)
-  }
+  try { body = text ? JSON.parse(text) : null } catch {}
+  if (!response.ok) throw new Error(`Engram ${options.method ?? "GET"} ${path} failed (${response.status}): ${typeof body === "string" ? body : JSON.stringify(body)}`)
   return body
 }
 
@@ -226,7 +171,6 @@ async function ensureEngram(): Promise<void> {
     const health = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(350) })
     if (health.ok) return
   } catch {}
-
   if (!engramIsLocal()) throw new Error(`Engram is not reachable at ${baseUrl}`)
   const binary = process.env.ENGRAM_BIN ?? executablePath("engram")
   if (!binary) throw new Error("Engram is not available; install it or set ENGRAM_BIN")
@@ -244,10 +188,7 @@ async function ensureEngram(): Promise<void> {
 }
 
 async function ensureSession(sessionID: string, project: string, directory: string): Promise<void> {
-  await engramFetch("/sessions", {
-    method: "POST",
-    body: { id: sessionID, project, directory },
-  })
+  await engramFetch("/sessions", { method: "POST", body: { id: sessionID, project, directory } })
 }
 
 function observationsFrom(body: any): Observation[] {
@@ -257,30 +198,23 @@ function observationsFrom(body: any): Observation[] {
   return []
 }
 
-async function loadState(project: string, changeId: string): Promise<{ state: WorkflowState; id?: number } | null> {
+async function loadState(project: string, changeId: string): Promise<{ state: WorkflowState; id?: number; migrated: boolean } | null> {
   const query = new URLSearchParams({ project, scope: "project", limit: "200", sort: "created_at:desc" })
   const rows = observationsFrom(await engramFetch(`/observations?${query.toString()}`))
     .filter((row) => row.topic_key === topicFor(changeId))
     .sort((a, b) => String(b.updated_at ?? b.created_at ?? "").localeCompare(String(a.updated_at ?? a.created_at ?? "")))
-
   for (const row of rows) {
     if (!row.content) continue
     try {
-      const candidate = JSON.parse(row.content) as WorkflowState
-      if (candidate.schema === WORKFLOW_SCHEMA && candidate.changeId === changeId) {
-        return { state: candidate, id: typeof row.id === "number" ? row.id : undefined }
-      }
+      const raw = JSON.parse(row.content)
+      const state = normalizeWorkflowState(raw)
+      if (state?.changeId === changeId) return { state, id: typeof row.id === "number" ? row.id : undefined, migrated: raw.schema !== WORKFLOW_SCHEMA }
     } catch {}
   }
   return null
 }
 
-async function persistState(
-  project: string,
-  sessionID: string,
-  state: WorkflowState,
-  observationID?: number,
-): Promise<{ id?: number }> {
+async function persistState(project: string, sessionID: string, state: WorkflowState, observationID?: number): Promise<{ id?: number }> {
   const content = JSON.stringify(state)
   if (observationID !== undefined) {
     const body = await engramFetch(`/observations/${observationID}`, {
@@ -289,55 +223,34 @@ async function persistState(
     })
     return { id: typeof body?.id === "number" ? body.id : observationID }
   }
-
   const body = await engramFetch("/observations", {
     method: "POST",
-    body: {
-      session_id: sessionID,
-      type: "config",
-      title: `Workflow ${state.changeId}`,
-      content,
-      project,
-      scope: "project",
-      topic_key: topicFor(state.changeId),
-      tool_name: "workflow_state",
-    },
+    body: { session_id: sessionID, type: "config", title: `Workflow ${state.changeId}`, content, project, scope: "project", topic_key: topicFor(state.changeId), tool_name: "workflow_state" },
   })
   return { id: typeof body?.id === "number" ? body.id : undefined }
 }
 
 async function lockPath(project: string, changeId: string): Promise<string> {
-  const bytes = new TextEncoder().encode(`${project}\0${changeId}`)
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))
-  const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")
-  return pathJoin(stateRoot(), "locks", `${hex}.lock`)
+  const digest = createHash("sha256").update(`${project}\0${changeId}`).digest("hex")
+  return pathJoin(stateRoot(), "locks", `${digest}.lock`)
 }
 
 async function withChangeLock<T>(project: string, changeId: string, operation: () => Promise<T>): Promise<T> {
   const path = await lockPath(project, changeId)
-  const lockRoot = pathJoin(stateRoot(), "locks")
-  mkdirSync(lockRoot, { recursive: true })
-
+  mkdirSync(pathJoin(stateRoot(), "locks"), { recursive: true })
   for (let attempt = 0; attempt < 12; attempt += 1) {
     let acquired = false
-    try {
-      mkdirSync(path)
-      acquired = true
-    } catch {}
-
+    try { mkdirSync(path); acquired = true } catch {}
     if (acquired) {
       writeFileSync(pathJoin(path, "owner.json"), JSON.stringify({ at: now() }))
-      try {
-        return await operation()
-      } finally {
+      try { return await operation() } finally {
         try { unlinkSync(pathJoin(path, "owner.json")) } catch {}
         try { rmdirSync(path) } catch {}
       }
     }
-
     let modifiedMs = 0
     try { modifiedMs = statSync(path).mtimeMs } catch {}
-    if (Number.isFinite(modifiedMs) && modifiedMs > 0 && Date.now() - modifiedMs > LOCK_STALE_MS) {
+    if (modifiedMs > 0 && Date.now() - modifiedMs > LOCK_STALE_MS) {
       try { unlinkSync(pathJoin(path, "owner.json")) } catch {}
       try { rmdirSync(path) } catch {}
       continue
@@ -347,14 +260,12 @@ async function withChangeLock<T>(project: string, changeId: string, operation: (
   throw new Error("Another workflow session currently owns this change lock")
 }
 
-function requireLead(agent: string, operation: string): void {
-  if (!isLeadAgent(agent)) {
-    throw new Error(`${operation} is reserved for ${WORKFLOW_AGENT} or a selectable workflow-lead-* profile; current agent is ${agent}`)
-  }
-}
-
 function isLeadAgent(agent: string): boolean {
   return agent === WORKFLOW_AGENT || agent.startsWith(WORKFLOW_AGENT_PREFIX)
+}
+
+function requireLead(agent: string, operation: string): void {
+  if (!isLeadAgent(agent)) throw new Error(`${operation} is reserved for workflow-lead; current agent is ${agent}`)
 }
 
 function profileFromAgent(agent: string): string {
@@ -363,9 +274,7 @@ function profileFromAgent(agent: string): string {
 
 function requireExpected(state: WorkflowState, expected: number | undefined): void {
   if (expected === undefined) throw new Error(`expected_version is required; current version is ${state.version}`)
-  if (expected !== state.version) {
-    throw new Error(`workflow version conflict: expected ${expected}, current ${state.version}; reload status before retrying`)
-  }
+  if (expected !== state.version) throw new Error(`workflow version conflict: expected ${expected}, current ${state.version}; reload status before retrying`)
 }
 
 function leaseActive(owner: Owner): boolean {
@@ -379,50 +288,89 @@ function ensureOwner(state: WorkflowState, sessionID: string): void {
 
 function transitionAllowed(from: Phase, to: Phase): boolean {
   const allowed: Record<Phase, Phase[]> = {
-    discovery: ["planning", "verification"],
+    discovery: ["planning"],
     planning: ["implementation", "discovery"],
     implementation: ["verification", "planning"],
-    verification: ["delivery", "implementation"],
-    delivery: ["verification"],
+    verification: ["delivery", "implementation", "planning"],
+    delivery: ["verification", "planning"],
   }
   return allowed[from].includes(to)
 }
 
-function event(
-  state: WorkflowState,
-  name: string,
-  summary: string,
-  agent: string,
-  sessionID: string,
-): WorkflowState {
+function event(state: WorkflowState, name: string, summary: string, agent: string, sessionID: string): WorkflowState {
   const timestamp = now()
   const version = state.version + 1
   const history = [...state.history, { version, event: name, summary, actor: agent, sessionID, at: timestamp }].slice(-100)
-  const owner = { ...state.owner, ...(isLeadAgent(agent) ? { agent } : {}), lastSeenAt: timestamp, leaseUntil: new Date(Date.now() + DEFAULT_LEASE_MS).toISOString() }
-  return { ...state, version, updatedAt: timestamp, owner, ...(isLeadAgent(agent) ? { profile: profileFromAgent(agent) } : {}), history }
+  const owner = { ...state.owner, agent, lastSeenAt: timestamp, leaseUntil: new Date(Date.now() + DEFAULT_LEASE_MS).toISOString() }
+  return { ...state, version, updatedAt: timestamp, owner, profile: profileFromAgent(agent), history }
 }
 
 function result(state: WorkflowState, message: string): { title: string; output: string; metadata: Record<string, unknown> } {
-  return { title: `workflow ${state.changeId} v${state.version}`, output: `${message}\n\n${JSON.stringify(state, null, 2)}`, metadata: { changeId: state.changeId, version: state.version, phase: state.phase, status: state.status, profile: state.profile ?? "default" } }
+  return {
+    title: `workflow ${state.changeId} v${state.version}`,
+    output: `${message}\n\n${JSON.stringify(state, null, 2)}`,
+    metadata: { changeId: state.changeId, version: state.version, phase: state.phase, status: state.status, schema: state.schema, profile: state.profile ?? "default" },
+  }
 }
 
+function actualContractHash(worktree: string, relativePath: string): string {
+  if (!relativePath || relativePath.startsWith("/") || relativePath.includes("..")) throw new Error("contract_path must be a project-relative path")
+  try { return createHash("sha256").update(readFileSync(pathJoin(worktree, relativePath))).digest("hex") } catch {
+    throw new Error(`contract file does not exist or cannot be read: ${relativePath}`)
+  }
+}
+
+function requireNonTerminal(state: WorkflowState): void {
+  if (state.status === "completed" || state.status === "aborted") throw new Error(`cannot mutate a terminal workflow (${state.status})`)
+}
+
+const capabilitySchema = tool.schema.object({
+  id: tool.schema.string(),
+  behavior: tool.schema.string(),
+  kind: tool.schema.enum(["current", "future", "non-goal"]),
+  status: tool.schema.enum(["pending", "verified", "preserved", "excluded"]),
+  evidence: tool.schema.string().optional(),
+})
+
+const findingSchema = tool.schema.object({
+  id: tool.schema.string(),
+  severity: tool.schema.string(),
+  category: tool.schema.string(),
+  location: tool.schema.string(),
+  evidence: tool.schema.string(),
+  impact: tool.schema.string(),
+  correction: tool.schema.string(),
+})
+
 export default tool({
-  description: "Manage the selectable OpenCode workflow state persisted in Engram. Mutations require the current version and are owned by workflow-lead; ready changes can be explicitly reopened or closed from a user-confirmed session.",
+  description: "Manage Continuous Workflow v2. Contract, delivery, implementation, verification, review, and completion gates are typed and enforced; only workflow-lead may mutate canonical state.",
   args: {
-    operation: tool.schema.enum(["start", "status", "claim", "transition", "checkpoint", "consultation", "recover", "ready", "complete", "reopen", "abort"]),
+    operation: tool.schema.enum(["start", "status", "claim", "recover", "delivery_prepare", "contract_draft", "contract_approve", "capabilities_record", "brief_present", "transition", "checkpoint", "consultation", "verification_record", "review_record", "ready", "complete", "reopen", "abort"]),
     change_id: tool.schema.string().describe("Stable change identifier"),
-    goal: tool.schema.string().optional().describe("Required for start"),
+    goal: tool.schema.string().optional(),
     acceptance_criteria: tool.schema.array(tool.schema.string()).optional(),
     phase: tool.schema.enum(PHASES).optional(),
     summary: tool.schema.string().optional(),
     next_action: tool.schema.string().optional(),
     expected_version: tool.schema.number().int().nonnegative().optional(),
+    contract_path: tool.schema.string().optional(),
+    contract_version: tool.schema.number().int().positive().optional(),
+    contract_hash: tool.schema.string().optional(),
+    brief_summary: tool.schema.string().optional(),
+    delivery_strategy: tool.schema.enum(DELIVERY_STRATEGIES).optional(),
+    branch: tool.schema.string().optional(),
+    base_branch: tool.schema.string().optional(),
+    capabilities: tool.schema.array(capabilitySchema).optional(),
+    verification_evidence: tool.schema.array(tool.schema.string()).optional(),
+    review_outcome: tool.schema.enum(["passed", "blocked"]).optional(),
+    findings: tool.schema.array(findingSchema).optional(),
     consultation_kind: tool.schema.enum(["consultation", "review"]).optional(),
-    confirmation: tool.schema.enum(["explicit_user_confirmation"]).optional().describe("Required to close a ready workflow after the user explicitly confirms completion"),
+    confirmation: tool.schema.enum(["explicit_user_contract_approval", "explicit_user_confirmation"]).optional(),
   },
   async execute(args, context) {
     const changeId = safeChangeId(args.change_id)
-    const project = projectFrom(context.worktree || context.directory)
+    const worktree = context.worktree || context.directory
+    const project = projectFrom(worktree)
     const operation = args.operation
     const summary = asText(args.summary)
     await ensureEngram()
@@ -431,96 +379,181 @@ export default tool({
     if (operation === "status") {
       const current = await loadState(project, changeId)
       if (!current) return { title: `workflow ${changeId}`, output: JSON.stringify({ status: "not_found", project, changeId }, null, 2), metadata: { status: "not_found", changeId, project } }
-      return result(current.state, "Current workflow state")
+      return result(current.state, current.migrated ? "Current workflow state (legacy v1 loaded as v2; next mutation will persist the migration)" : "Current workflow state")
     }
 
-    if (operation !== "consultation") requireLead(context.agent, operation)
-
+    requireLead(context.agent, operation)
     return withChangeLock(project, changeId, async () => {
       const current = await loadState(project, changeId)
-
       if (operation === "start") {
         if (current) throw new Error(`change ${changeId} already exists at version ${current.state.version}`)
-        const goalText = asText(args.goal)
-        if (!goalText) throw new Error("goal is required for start")
+        const goal = asText(args.goal)
+        if (!goal) throw new Error("goal is required for start")
         const timestamp = now()
         const state: WorkflowState = {
           schema: WORKFLOW_SCHEMA,
           changeId,
           project,
-          worktree: context.worktree,
-          goal: goalText,
+          worktree,
+          goal,
           acceptanceCriteria: (args.acceptance_criteria ?? []).map(asText).filter(Boolean),
           phase: "discovery",
           status: "active",
           profile: profileFromAgent(context.agent),
           version: 1,
           owner: { agent: context.agent, sessionID: context.sessionID, claimedAt: timestamp, lastSeenAt: timestamp, leaseUntil: new Date(Date.now() + DEFAULT_LEASE_MS).toISOString() },
-          nextAction: asText(args.next_action) || "Inspect the project and define the implementation boundary",
+          nextAction: asText(args.next_action) || "Prepare a non-protected delivery branch, then draft the functional contract",
           updatedAt: timestamp,
-          history: [{ version: 1, event: "started", summary: goalText, actor: context.agent, sessionID: context.sessionID, at: timestamp }],
+          history: [{ version: 1, event: "started", summary: goal, actor: context.agent, sessionID: context.sessionID, at: timestamp }],
           consultations: [],
+          contract: { path: expectedContractPath(changeId), version: 0, hash: "", status: "missing" },
+          implementationBrief: { status: "missing", contractHash: "", summary: "" },
+          delivery: { status: "missing", branch: "", baseBranch: "", worktree },
+          capabilities: [],
+          verification: { status: "missing", treeFingerprint: "", evidence: [] },
+          review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
         }
         const saved = await persistState(project, context.sessionID, state)
-        const readback = await loadState(project, changeId)
-        if (!readback || readback.state.version !== state.version) throw new Error("Engram readback did not confirm the started workflow")
-        return result({ ...state }, `Started workflow ${changeId} (observation ${saved.id ?? "unknown"})`)
+        return result(state, `Started workflow ${changeId} (observation ${saved.id ?? "unknown"})`)
       }
 
       if (!current) throw new Error(`change ${changeId} does not exist; run operation=start first`)
       let state = current.state
+      requireExpected(state, args.expected_version)
 
       if (operation === "claim" || operation === "recover") {
-        requireExpected(state, args.expected_version)
-        if (state.status === "completed" || state.status === "aborted") throw new Error(`cannot claim a terminal workflow (${state.status})`)
-        if (state.owner.sessionID !== context.sessionID && leaseActive(state.owner) && operation === "claim") {
-          throw new Error(`workflow is still leased by session ${state.owner.sessionID}; use recover after the lease expires`)
-        }
+        requireNonTerminal(state)
+        if (state.owner.sessionID !== context.sessionID && leaseActive(state.owner) && operation === "claim") throw new Error(`workflow is still leased by session ${state.owner.sessionID}; use recover after the lease expires`)
         state = event(state, operation === "recover" ? "recovered" : "claimed", summary || `${operation} by ${context.sessionID}`, context.agent, context.sessionID)
-        state.owner = { ...state.owner, agent: context.agent, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
-      } else if (operation === "consultation") {
-        requireExpected(state, args.expected_version)
-        const kind = args.consultation_kind ?? "consultation"
-        state = event(state, kind, summary || `${kind} recorded`, context.agent, context.sessionID)
-        state.consultations = [...state.consultations, { kind, actor: context.agent, sessionID: context.sessionID, summary: summary || `${kind} recorded`, at: state.updatedAt }].slice(-100)
-      } else if (operation === "ready") {
-        requireExpected(state, args.expected_version)
-        ensureOwner(state, context.sessionID)
-        if (state.status !== "active") throw new Error(`workflow must be active before requesting completion (current status: ${state.status})`)
-        if (state.phase !== "verification" && state.phase !== "delivery") throw new Error(`workflow must be in verification or delivery before requesting completion (current phase: ${state.phase})`)
-        state = event(state, "ready_for_confirmation", summary || "Implementation is ready; waiting for explicit user confirmation", context.agent, context.sessionID)
-        state.status = "ready"
-        state.phase = "delivery"
-        state.nextAction = asText(args.next_action) || "Await explicit user confirmation before completing this change"
-      } else if (operation === "reopen") {
-        requireExpected(state, args.expected_version)
-        if (state.status !== "ready") throw new Error(`only a ready workflow can be reopened (current status: ${state.status})`)
-        state.owner = { ...state.owner, agent: context.agent, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
-        state = event(state, "reopened", summary || "User requested another adjustment before completion", context.agent, context.sessionID)
-        state.status = "active"
-        state.phase = "verification"
-        state.nextAction = asText(args.next_action) || "Re-evaluate the requested adjustment and continue the existing change"
+        state.owner = { ...state.owner, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
       } else {
-        requireExpected(state, args.expected_version)
         if (operation === "complete" && state.status === "ready") {
           if (args.confirmation !== "explicit_user_confirmation") throw new Error("explicit user confirmation is required before completing this workflow")
-          state.owner = { ...state.owner, agent: context.agent, sessionID: context.sessionID, claimedAt: state.owner.claimedAt || now() }
+          state.owner = { ...state.owner, sessionID: context.sessionID }
         } else {
           ensureOwner(state, context.sessionID)
         }
-        if (state.status === "completed" || state.status === "aborted") throw new Error(`cannot mutate a terminal workflow (${state.status})`)
+        requireNonTerminal(state)
         const nextAction = asText(args.next_action)
-        if (operation === "transition") {
+
+        if (operation === "delivery_prepare") {
+          const branch = asText(args.branch) || currentBranch(worktree)
+          const actualBranch = currentBranch(worktree)
+          if (!args.delivery_strategy) throw new Error("delivery_strategy is required")
+          if (!branch || branch !== actualBranch) throw new Error(`prepared branch must equal current branch (${actualBranch || "unresolved"})`)
+          if (isProtectedBranch(branch)) throw new Error(`protected branch ${branch} cannot be used for implementation`)
+          state = event(state, "delivery_prepared", summary || `${args.delivery_strategy} on ${branch}`, context.agent, context.sessionID)
+          state.delivery = { status: "prepared", strategy: args.delivery_strategy, branch, baseBranch: asText(args.base_branch) || "main", worktree, preparedAt: state.updatedAt }
+          state.worktree = worktree
+          state.nextAction = nextAction || `Draft ${expectedContractPath(changeId)}`
+        } else if (operation === "contract_draft") {
+          const branch = currentBranch(worktree)
+          if (state.delivery.status !== "prepared" || state.delivery.worktree !== worktree || state.delivery.branch !== branch || isProtectedBranch(branch)) {
+            throw new Error("prepare and record a non-protected delivery branch/worktree before drafting the functional contract")
+          }
+          const path = asText(args.contract_path) || expectedContractPath(changeId)
+          if (path !== expectedContractPath(changeId)) throw new Error(`contract_path must be exactly ${expectedContractPath(changeId)}`)
+          const version = args.contract_version ?? 0
+          if (version < 1) throw new Error("contract_version must be at least 1")
+          const actualHash = actualContractHash(worktree, path)
+          if (asText(args.contract_hash) && asText(args.contract_hash) !== actualHash) throw new Error("contract_hash does not match the contract file")
+          state = event(state, "contract_drafted", summary || `Contract v${version} drafted`, context.agent, context.sessionID)
+          state.contract = { path, version, hash: actualHash, status: "draft" }
+          state.implementationBrief = { status: "missing", contractHash: "", summary: "" }
+          state.capabilities = []
+          state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
+          state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
+          state.nextAction = nextAction || "Present the complete functional contract and wait for explicit approval"
+        } else if (operation === "contract_approve") {
+          if (args.confirmation !== "explicit_user_contract_approval") throw new Error("explicit_user_contract_approval confirmation is required")
+          if (state.contract.status !== "draft") throw new Error("only a drafted contract can be approved")
+          const actualHash = actualContractHash(worktree, state.contract.path)
+          if (actualHash !== state.contract.hash || asText(args.contract_hash) !== actualHash) throw new Error("approval must reference the exact current contract hash")
+          if (!summary) throw new Error("summary must identify the user's explicit approval evidence")
+          state = event(state, "contract_approved", summary, context.agent, context.sessionID)
+          state.contract = { ...state.contract, status: "approved", approvedAt: state.updatedAt, approvalSessionID: context.sessionID, approvalEvidence: summary }
+          state.nextAction = nextAction || "Record the capability matrix and obtain any required technical consultations"
+        } else if (operation === "capabilities_record") {
+          if (state.contract.status !== "approved") throw new Error("approve the contract before recording capabilities")
+          const capabilities = (args.capabilities ?? []) as Capability[]
+          if (capabilities.length === 0) throw new Error("capabilities must contain at least one observable contract item")
+          const ids = new Set<string>()
+          for (const capability of capabilities) {
+            if (!asText(capability.id) || !asText(capability.behavior)) throw new Error("every capability needs id and behavior")
+            if (ids.has(capability.id)) throw new Error(`duplicate capability id: ${capability.id}`)
+            ids.add(capability.id)
+          }
+          state = event(state, "capabilities_recorded", summary || `${capabilities.length} contract capabilities recorded`, context.agent, context.sessionID)
+          state.capabilities = capabilities
+          state.nextAction = nextAction || "Consult specialists when needed, reconcile their findings, and present the implementation brief"
+        } else if (operation === "brief_present") {
+          if (state.contract.status !== "approved") throw new Error("approve the contract before presenting the implementation brief")
+          const brief = asText(args.brief_summary)
+          if (!brief) throw new Error("brief_summary is required")
+          if (state.capabilities.length === 0) throw new Error("record the capability matrix before presenting the brief")
+          state = event(state, "implementation_brief_presented", summary || "Implementation brief presented to the user", context.agent, context.sessionID)
+          state.implementationBrief = { status: "presented", contractHash: state.contract.hash, summary: brief, presentedAt: state.updatedAt }
+          state.nextAction = nextAction || "Transition to implementation and delegate the approved package to workflow-implementer"
+        } else if (operation === "consultation") {
+          const kind = args.consultation_kind ?? "consultation"
+          state = event(state, kind, summary || `${kind} consolidated by Lead`, context.agent, context.sessionID)
+          state.consultations = [...state.consultations, { kind, actor: context.agent, sessionID: context.sessionID, summary: summary || `${kind} consolidated by Lead`, at: state.updatedAt }].slice(-100)
+        } else if (operation === "transition") {
           if (!args.phase || !transitionAllowed(state.phase, args.phase)) throw new Error(`invalid phase transition ${state.phase} -> ${args.phase ?? "(missing)"}`)
+          if (args.phase === "planning" && state.contract.status !== "approved") throw new Error("planning requires an approved contract")
+          if (args.phase === "implementation") {
+            const errors = implementationGateErrors(state, worktree)
+            if (errors.length) throw new Error(`implementation gate failed: ${errors.join("; ")}`)
+            if (state.capabilities.length === 0) throw new Error("implementation gate failed: capability matrix is empty")
+            state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
+            state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
+          }
           state = event(state, `phase:${args.phase}`, summary || `Transitioned to ${args.phase}`, context.agent, context.sessionID)
           state.phase = args.phase
           if (nextAction) state.nextAction = nextAction
         } else if (operation === "checkpoint") {
           state = event(state, "checkpoint", summary || "Checkpoint", context.agent, context.sessionID)
           if (nextAction) state.nextAction = nextAction
+        } else if (operation === "verification_record") {
+          if (state.phase !== "verification") throw new Error("verification can only be recorded in verification phase")
+          const evidence = (args.verification_evidence ?? []).map(asText).filter(Boolean)
+          if (evidence.length === 0) throw new Error("verification_evidence is required")
+          const fingerprint = treeFingerprint(worktree)
+          state = event(state, "verification_passed", summary || `${evidence.length} verification evidence item(s) recorded`, context.agent, context.sessionID)
+          state.verification = { status: "passed", treeFingerprint: fingerprint, evidence, recordedAt: state.updatedAt }
+          state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
+          state.nextAction = nextAction || "Launch independent review against the verified tree"
+        } else if (operation === "review_record") {
+          if (state.phase !== "verification") throw new Error("review can only be recorded in verification phase")
+          if (state.verification.status !== "passed" || state.verification.treeFingerprint !== treeFingerprint(worktree)) throw new Error("review requires current verification evidence")
+          if (!args.review_outcome) throw new Error("review_outcome is required")
+          const findings = (args.findings ?? []) as Finding[]
+          if (args.review_outcome === "passed" && findings.length > 0) throw new Error("a passed review cannot contain findings")
+          if (args.review_outcome === "blocked" && findings.length === 0) throw new Error("a blocked review must contain at least one finding")
+          const fingerprint = treeFingerprint(worktree)
+          state = event(state, args.review_outcome === "passed" ? "review_passed" : "review_blocked", summary || `Review ${args.review_outcome}`, context.agent, context.sessionID)
+          state.review = { status: args.review_outcome, treeFingerprint: fingerprint, findings, summary: summary || "", recordedAt: state.updatedAt }
+          state.nextAction = nextAction || (args.review_outcome === "passed" ? "Request ready after confirming capability evidence" : "Return all findings to workflow-implementer, then reverify and rereview")
+        } else if (operation === "ready") {
+          if (state.status !== "active") throw new Error(`workflow must be active before ready (current: ${state.status})`)
+          const errors = readyGateErrors(state, worktree)
+          if (errors.length) throw new Error(`ready gate failed: ${errors.join("; ")}`)
+          state = event(state, "ready_for_confirmation", summary || "Implementation is ready; waiting for explicit user confirmation", context.agent, context.sessionID)
+          state.status = "ready"
+          state.phase = "delivery"
+          state.nextAction = nextAction || "Await explicit user confirmation before completing this change"
+        } else if (operation === "reopen") {
+          if (state.status !== "ready") throw new Error(`only a ready workflow can be reopened (current: ${state.status})`)
+          state = event(state, "reopened", summary || "User requested another adjustment before completion", context.agent, context.sessionID)
+          state.status = "active"
+          state.phase = "planning"
+          state.implementationBrief = { status: "missing", contractHash: "", summary: "" }
+          state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
+          state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
+          state.nextAction = nextAction || "Reconcile the adjustment with the contract; redraft it if behavior changes, then present a new brief"
         } else if (operation === "complete") {
-          if (state.status !== "ready") throw new Error(`workflow must be ready and explicitly confirmed before completion (current status: ${state.status})`)
-          if (args.confirmation !== "explicit_user_confirmation") throw new Error("explicit user confirmation is required before completing this workflow")
+          if (state.status !== "ready") throw new Error(`workflow must be ready before completion (current: ${state.status})`)
+          if (args.confirmation !== "explicit_user_confirmation") throw new Error("explicit user confirmation is required before completion")
           state = event(state, "completed", summary || "Completed", context.agent, context.sessionID)
           state.status = "completed"
           state.phase = "delivery"
@@ -528,15 +561,13 @@ export default tool({
         } else if (operation === "abort") {
           state = event(state, "aborted", summary || "Aborted", context.agent, context.sessionID)
           state.status = "aborted"
-          state.nextAction = nextAction || "Investigate the abort reason before restarting"
+          state.nextAction = nextAction || "Investigate the abort reason before starting another change"
         }
       }
 
       await persistState(project, context.sessionID, state, current.id)
       const readback = await loadState(project, changeId)
-      if (!readback || readback.state.version !== state.version || readback.state.status !== state.status) {
-        throw new Error("Engram readback disagrees with the committed workflow state")
-      }
+      if (!readback || readback.state.version !== state.version || readback.state.status !== state.status) throw new Error("Engram readback disagrees with the committed workflow state")
       return result(state, `Applied ${operation} to ${changeId}`)
     })
   },

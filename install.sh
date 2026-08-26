@@ -13,13 +13,18 @@ mkdir -p "${OPENCODE_ROOT}/agents" "${OPENCODE_ROOT}/commands" "${OPENCODE_ROOT}
 
 for file in "${ROOT_DIR}"/agents/workflow-*.md; do
   target="${OPENCODE_ROOT}/agents/$(basename -- "${file}")"
-  sed "s|__CONTINUOUS_WORKFLOW_STATE_DIR__|${HOME}/.local/share/opencode/continuous-workflow|g" "${file}" > "${target}"
+  sed \
+    -e "s|__OPENCODE_ROOT__|${OPENCODE_ROOT}|g" \
+    -e "s|__CONTINUOUS_WORKFLOW_STATE_DIR__|${HOME}/.local/share/opencode/continuous-workflow|g" \
+    -e "s|__OPENCODE_TOOL_OUTPUT_DIR__|${HOME}/.local/share/opencode/tool-output|g" \
+    "${file}" > "${target}"
 done
 for file in "${ROOT_DIR}"/commands/work-*.md; do cp "${file}" "${OPENCODE_ROOT}/commands/"; done
 cp "${ROOT_DIR}/plugins/continuous_workflow.ts" "${OPENCODE_ROOT}/plugins/"
 cp "${ROOT_DIR}/skills/continuous-workflow/SKILL.md" "${OPENCODE_ROOT}/skills/continuous-workflow/"
 cp "${ROOT_DIR}/tools/workflow_state.ts" "${OPENCODE_ROOT}/tools/"
 cp "${ROOT_DIR}/cli/workflow-ai.ts" "${WORKFLOW_ROOT}/"
+cp "${ROOT_DIR}/continuous-workflow/runtime.ts" "${WORKFLOW_ROOT}/"
 cp "${ROOT_DIR}/cli/workflow-ai" "${HOME}/.local/bin/workflow-ai"
 cp "${ROOT_DIR}/opencode.mcp.json" "${WORKFLOW_ROOT}/"
 mkdir -p "${WORKFLOW_ROOT}/scripts"

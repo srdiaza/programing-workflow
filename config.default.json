@@ -1,7 +1,10 @@
 {
   "schema": "continuous-workflow/config/v1",
+  "description": "Default Continuous Workflow profile with independently configurable Lead, Implementer, specialists, and Reviewer.",
   "lead_model": "openai/gpt-5.6-luna",
   "lead_variant": "default",
+  "implementer_model": "openai/gpt-5.6-luna",
+  "implementer_variant": "default",
   "areas": {
     "discovery": "openai/gpt-5.6-luna",
     "architecture": "minimax/MiniMax-M3",
@@ -29,7 +32,7 @@
     "git_push": "ask",
     "question": "allow",
     "task": "allow",
-    "external_directory": "ask"
+    "external_directory": "deny"
   },
   "profiles": {}
 }

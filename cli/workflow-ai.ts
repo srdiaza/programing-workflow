@@ -21,6 +21,8 @@ type WorkflowProfile = {
   description: string
   lead_model: string
   lead_variant: string
+  implementer_model: string
+  implementer_variant: string
   areas: Record<AreaName, string>
   area_variants: Record<AreaName, string>
   reviewer_model: string
@@ -67,6 +69,8 @@ const defaults: WorkflowConfig = {
   description: "Perfil normal del workflow; Lead Luna con especialistas configurados por área.",
   lead_model: "openai/gpt-5.6-luna",
   lead_variant: "default",
+  implementer_model: "openai/gpt-5.6-luna",
+  implementer_variant: "default",
   areas: {
     discovery: "openai/gpt-5.6-luna",
     architecture: "minimax/MiniMax-M3",
@@ -94,13 +98,14 @@ const defaults: WorkflowConfig = {
     git_push: "ask",
     question: "allow",
     task: "allow",
-    external_directory: "ask",
+    external_directory: "deny",
   },
   profiles: {},
 }
 
 const agentModels: Record<string, string> = {
   "workflow-lead": "lead_model",
+  "workflow-implementer": "implementer_model",
   "workflow-discovery": "areas.discovery",
   "workflow-architecture": "areas.architecture",
   "workflow-frontend": "areas.frontend",
@@ -113,6 +118,7 @@ const agentModels: Record<string, string> = {
 
 const agentVariants: Record<string, string> = {
   "workflow-lead": "lead_variant",
+  "workflow-implementer": "implementer_variant",
   "workflow-discovery": "area_variants.discovery",
   "workflow-architecture": "area_variants.architecture",
   "workflow-frontend": "area_variants.frontend",
@@ -141,6 +147,12 @@ function mergeConfig(value: Partial<WorkflowConfig> | undefined): WorkflowConfig
     ...defaults,
     ...(value ?? {}),
     description: typeof value?.description === "string" && value.description.trim() ? value.description : defaults.description,
+    implementer_model: typeof value?.implementer_model === "string" && value.implementer_model.trim()
+      ? value.implementer_model
+      : typeof value?.lead_model === "string" && value.lead_model.trim() ? value.lead_model : defaults.implementer_model,
+    implementer_variant: typeof value?.implementer_variant === "string" && value.implementer_variant.trim()
+      ? value.implementer_variant
+      : typeof value?.lead_variant === "string" && value.lead_variant.trim() ? value.lead_variant : defaults.implementer_variant,
     areas: { ...defaults.areas, ...(value?.areas ?? {}) },
     area_variants: { ...defaults.area_variants, ...(value?.area_variants ?? {}) },
     permissions: {
@@ -166,6 +178,12 @@ function mergeProfile(base: WorkflowProfile, overrides: WorkflowProfileOverrides
     ...base,
     lead_model: typeof overrides?.lead_model === "string" && overrides.lead_model.trim() ? overrides.lead_model : base.lead_model,
     lead_variant: typeof overrides?.lead_variant === "string" && overrides.lead_variant.trim() ? overrides.lead_variant : base.lead_variant,
+    implementer_model: typeof overrides?.implementer_model === "string" && overrides.implementer_model.trim()
+      ? overrides.implementer_model
+      : typeof overrides?.lead_model === "string" && overrides.lead_model.trim() ? overrides.lead_model : base.implementer_model,
+    implementer_variant: typeof overrides?.implementer_variant === "string" && overrides.implementer_variant.trim()
+      ? overrides.implementer_variant
+      : typeof overrides?.lead_variant === "string" && overrides.lead_variant.trim() ? overrides.lead_variant : base.implementer_variant,
     description: typeof overrides?.description === "string" && overrides.description.trim() ? overrides.description : base.description,
     areas: { ...base.areas, ...(overrides?.areas ?? {}) },
     area_variants: { ...base.area_variants, ...(overrides?.area_variants ?? {}) },
@@ -200,6 +218,7 @@ function profileAgentName(base: string, profile: string): string {
 
 const profileAgentBases = [
   "workflow-lead",
+  "workflow-implementer",
   "workflow-consultant",
   "workflow-reviewer",
   "workflow-discovery",
@@ -226,6 +245,7 @@ async function saveConfig(config: WorkflowConfig): Promise<void> {
 
 function modelValue(config: WorkflowProfile, path: string): string {
   if (path === "lead_model") return config.lead_model
+  if (path === "implementer_model") return config.implementer_model
   if (path === "reviewer_model") return config.reviewer_model
   const [root, area] = path.split(".")
   if (root === "areas" && area && area in config.areas) return config.areas[area as AreaName]
@@ -234,6 +254,7 @@ function modelValue(config: WorkflowProfile, path: string): string {
 
 function variantValue(config: WorkflowProfile, path: string): string {
   if (path === "lead_variant") return config.lead_variant || "default"
+  if (path === "implementer_variant") return config.implementer_variant || "default"
   if (path === "reviewer_variant") return config.reviewer_variant || "default"
   const [root, area] = path.split(".")
   if (root === "area_variants" && area && area in config.area_variants) return config.area_variants[area as AreaName] || "default"
@@ -282,6 +303,7 @@ async function syncProfileAgentModels(profile: WorkflowProfile, profileName: str
 }
 
 const workflowSubagents = [
+  "workflow-implementer",
   "workflow-consultant",
   "workflow-reviewer",
   "workflow-discovery",
@@ -312,10 +334,17 @@ function bashPermissionBlock(mode: PermissionMode, gitPush: "ask" | "deny"): str
   }
   lines.push(
     `    "git push*": ${mode === "deny" ? "deny" : gitPush}`,
-    '    "git reset --hard*": deny',
-    '    "git clean -fd*": deny',
-    '    "rm -rf*": deny',
-    '    "sudo *": deny',
+    '    "git restore*": deny',
+    '    "git checkout --*": deny',
+    '    "git reset*": deny',
+    '    "git clean*": deny',
+    '    "git stash*": deny',
+    '    "git rebase*": deny',
+    '    "git merge*": deny',
+    '    "git cherry-pick*": deny',
+    '    "git revert*": deny',
+    '    "rm*": deny',
+    '    "sudo*": deny',
   )
   return lines.join("\n")
 }
@@ -332,6 +361,7 @@ function profileRoutingBlock(profileName: string): string {
   const suffix = (base: string) => `\`${profileAgentName(base, profileName)}\``
   return [
     "## Profile routing",
+    `- Implementer: ${suffix("workflow-implementer")}`,
     `- Discovery: ${suffix("workflow-discovery")}`,
     `- Architecture: ${suffix("workflow-architecture")}`,
     `- Frontend: ${suffix("workflow-frontend")}`,
@@ -349,6 +379,7 @@ function applyProfileIdentity(content: string, baseAgent: string, profileName: s
   let updated = content
   updated = updated.replace(/^description:\s*(.*)$/m, (_match, description) => `description: ${description} [perfil ${profileName}]`)
   updated = updated.replaceAll("workflow-lead", "workflow-lead-" + profileName)
+  updated = updated.replaceAll("workflow-implementer", "workflow-implementer-" + profileName)
   updated = updated.replaceAll("workflow-discovery", "workflow-discovery-" + profileName)
   updated = updated.replaceAll("workflow-architecture", "workflow-architecture-" + profileName)
   updated = updated.replaceAll("workflow-frontend", "workflow-frontend-" + profileName)
@@ -375,7 +406,10 @@ async function syncLeadPermissions(filePath: string, permissions: WorkflowPermis
   current = markedBlock(current, "workflow-permissions-external-start", "workflow-permissions-external-end", [
     "  external_directory:",
     `    \"*\": ${permissions.external_directory}`,
+    `    "${workflowRoot}/*": allow`,
+    `    "${opencodeRoot}/skills/continuous-workflow/*": allow`,
     `    "${workflowStateDirectory}/*": allow`,
+    `    "${home}/.local/share/opencode/tool-output/*": allow`,
   ].join("\n"))
   if (current !== await file.text()) await Bun.write(filePath, current)
 }
@@ -411,7 +445,13 @@ const modelAssignments: ModelAssignment[] = [
     path: "lead_model",
     variantPath: "lead_variant",
     label: "Lead",
-    description: "Es dueño del cambio completo: objetivo, plan, implementación, verificación, recuperación y solicitud de cierre.",
+    description: "Es dueño del alcance, decisiones técnicas, reconciliación, verificación, recuperación y cierre; no escribe código de aplicación.",
+  },
+  {
+    path: "implementer_model",
+    variantPath: "implementer_variant",
+    label: "Implementer",
+    description: "Es el único agente que escribe código y tests después de que el contrato y el brief fueron aprobados; no decide ni modifica el alcance.",
   },
   {
     path: "areas.discovery",
@@ -842,7 +882,7 @@ const tuiPermissionItems = [
   { key: "bash", label: "Comandos shell", description: "Controla los comandos Bash; reset destructivo, rm -rf y sudo permanecen bloqueados.", choices: ["allow", "ask", "deny"] as const },
   { key: "git_push", label: "Git push", description: "Permite proponer un push y pedir aprobación antes de ejecutarlo.", choices: ["ask", "deny"] as const },
   { key: "task", label: "Subagentes", description: "Controla el lanzamiento de los consultores workflow-* permitidos.", choices: ["allow", "ask", "deny"] as const },
-  { key: "external_directory", label: "Fuera del proyecto", description: "Permite acceder a rutas externas; el directorio de estado del workflow siempre se conserva.", choices: ["allow", "ask", "deny"] as const },
+  { key: "external_directory", label: "Fuera del proyecto", description: "Acceso externo general; los directorios propios del workflow siguen permitidos. Se recomienda deny.", choices: ["deny", "ask", "allow"] as const },
   { key: "question", label: "Preguntas interactivas", description: "Permite que el Lead pause y solicite una decisión con opciones.", choices: ["allow", "deny"] as const },
 ]
 
@@ -891,12 +931,14 @@ function tuiAssignments(): ModelAssignment[] {
 
 function tuiSetModel(config: WorkflowConfig, path: string, value: string): void {
   if (path === "lead_model") config.lead_model = value
+  else if (path === "implementer_model") config.implementer_model = value
   else if (path === "reviewer_model") config.reviewer_model = value
   else config.areas[path.split(".")[1] as AreaName] = value
 }
 
 function tuiSetVariant(config: WorkflowConfig, path: string, value: string): void {
   if (path === "lead_variant") config.lead_variant = value
+  else if (path === "implementer_variant") config.implementer_variant = value
   else if (path === "reviewer_variant") config.reviewer_variant = value
   else config.area_variants[path.split(".")[1] as AreaName] = value
 }
@@ -1280,6 +1322,8 @@ function profileSnapshot(profile: WorkflowProfile, description: string): Workflo
     description,
     lead_model: profile.lead_model,
     lead_variant: profile.lead_variant,
+    implementer_model: profile.implementer_model,
+    implementer_variant: profile.implementer_variant,
     areas: { ...profile.areas },
     area_variants: { ...profile.area_variants },
     reviewer_model: profile.reviewer_model,

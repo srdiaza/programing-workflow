@@ -12,6 +12,10 @@ workflow-ai sync
 
 `doctor` checks OpenCode discovery, the state tool, Engram, CodeGraph, Context7, all area agents, and the MCP registrations. `sync` reapplies model, variant, routing, and permission settings to the default agents and regenerates every configured profile family.
 
+Continuous Workflow v2 adds `workflow-implementer`, contract-hash approval, non-protected delivery topology, capability coverage, and tree-fingerprint receipts for implementation, verification, and review. Legacy `continuous-workflow/v1` lifecycle records are loaded safely with all new gates marked missing; the next mutation persists the v2 migration, and implementation remains blocked until those gates are completed.
+
+Configurations that predate the separate `implementer_model` and `implementer_variant` fields inherit the Lead assignment. Opening and saving `workflow-ai configure` persists the Implementer explicitly. Fresh installs expose Lead and Implementer as separate configurable sections.
+
 Profiles are additive generated agents under the `workflow-*` namespace. An OpenCode upgrade does not own or overwrite them, but a full config reset can remove them. Re-run the repository installer; it preserves the configuration file and regenerates all profile agents from it. Repeated syncs are safe and do not accumulate profile suffixes.
 
 Use `workflow-ai deps install` to fill missing local runtimes and registrations, or `workflow-ai deps update` to update the pinned Engram and CodeGraph versions. Context7 is deliberately represented as a remote MCP URL; its service version is controlled by the provider, while this workflow installs and verifies the registration.
