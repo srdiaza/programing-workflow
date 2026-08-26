@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { spawnSync } from "node:child_process"
 import {
   WORKFLOW_SCHEMA,
+  assessmentGateErrors,
   implementationGateErrors,
   normalizeWorkflowState,
   readyGateErrors,
@@ -39,6 +40,7 @@ function state(cwd: string): WorkflowState {
     worktree: cwd,
     goal: "test the workflow",
     acceptanceCriteria: ["observable behavior works"],
+    mode: "implementation",
     phase: "verification",
     status: "active",
     version: 7,
@@ -94,6 +96,25 @@ describe("Continuous Workflow v2 gates", () => {
     const candidate = state(cwd)
     candidate.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] }
     expect(implementationGateErrors(candidate, cwd)).toContain("verification plan is missing, incomplete, or has no workflow-implementer owner")
+  })
+
+  test("assessment does not require implementation delivery or brief", () => {
+    const cwd = repository()
+    const candidate = state(cwd)
+    candidate.mode = "assessment"
+    candidate.phase = "verification"
+    candidate.implementationBrief = { status: "missing", contractHash: "", summary: "" }
+    candidate.delivery = { status: "missing", branch: "", baseBranch: "main", worktree: cwd }
+    candidate.verificationPlan = {
+      status: "planned",
+      tier: "focused",
+      owner: "workflow-consultant",
+      reason: "read-only library impact assessment",
+      requiredChecks: ["inspect package changes"],
+      artifactPaths: [],
+    }
+    candidate.verification = { status: "passed", treeFingerprint: treeFingerprint(cwd), evidence: ["package comparison"] }
+    expect(assessmentGateErrors(candidate, cwd)).toEqual([])
   })
 
   test("current-schema states without a verification plan fail closed while remaining readable", () => {

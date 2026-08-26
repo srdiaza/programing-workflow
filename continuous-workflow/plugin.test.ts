@@ -36,6 +36,7 @@ function state(cwd: string, contractHash: string, phase: WorkflowState["phase"] 
     worktree: cwd,
     goal: "prove gates",
     acceptanceCriteria: ["gates work"],
+    mode: "implementation",
     phase,
     status: "active",
     version: 5,
@@ -119,6 +120,59 @@ describe("Continuous Workflow plugin enforcement", () => {
     await plugin["tool.execute.before"]({ tool: "task", sessionID: "lead", callID: "allowed" }, output)
     expect(output.args.prompt).toContain("Continuous Workflow enforced package")
     expect(output.args.prompt).toContain(repo.contractHash)
+  })
+
+  test("assessment skips implementation and delegates only its read-only verification", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    const assessment = state(repo.cwd, repo.contractHash, "planning")
+    assessment.mode = "assessment"
+    assessment.implementationBrief = { status: "missing", contractHash: "", summary: "" }
+    assessment.delivery = { status: "missing", branch: "", baseBranch: "main", worktree: repo.cwd }
+    assessment.verificationPlan = {
+      status: "planned",
+      tier: "focused",
+      owner: "workflow-consultant",
+      reason: "read-only library impact assessment",
+      requiredChecks: ["inspect package changes"],
+      artifactPaths: [],
+    }
+    await cacheState(plugin, "lead", assessment)
+
+    await expect(plugin["tool.execute.before"](
+      { tool: "edit", sessionID: "lead", callID: "assessment-contract" },
+      { args: { filePath: `${repo.cwd}/workflow/contracts/plugin-test.md` } },
+    )).resolves.toBeUndefined()
+
+    await expect(plugin["tool.execute.before"](
+      { tool: "task", sessionID: "lead", callID: "assessment-implementer" },
+      { args: { subagent_type: "workflow-implementer", prompt: "implement" } },
+    )).rejects.toThrow("assessment is read-only")
+
+    await expect(plugin["tool.execute.before"](
+      { tool: "workflow_state", sessionID: "lead", callID: "assessment-verify-transition" },
+      { args: { operation: "transition", phase: "verification" } },
+    )).resolves.toBeUndefined()
+    assessment.phase = "verification"
+    await cacheState(plugin, "lead", assessment)
+
+    const verification = { args: { subagent_type: "workflow-consultant", prompt: "assess the library" } }
+    const verificationInput = { tool: "task", sessionID: "lead", callID: "assessment-verify" }
+    await plugin["tool.execute.before"](
+      verificationInput,
+      verification,
+    )
+    expect(verification.args.prompt).toContain("Execute only the recorded verification plan")
+    await expect(plugin["tool.execute.before"](
+      { tool: "workflow_state", sessionID: "lead", callID: "assessment-evidence-before" },
+      { args: { operation: "verification_record" } },
+    )).rejects.toThrow("completed read-only")
+    await plugin["tool.execute.after"](verificationInput, verification)
+    await expect(plugin["tool.execute.before"](
+      { tool: "workflow_state", sessionID: "lead", callID: "assessment-evidence-after" },
+      { args: { operation: "verification_record" } },
+    )).resolves.toBeUndefined()
   })
 
   test("read-only specialists may perform fact-finding before the contract only in discovery", async () => {

@@ -191,6 +191,32 @@ function persistedImplementationReceipt(state: WorkflowState, worktree: string, 
   }
 }
 
+function verificationReceiptPath(state: WorkflowState, worktree: string, fingerprint: string): string {
+  const stateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+    || `${process.env.XDG_STATE_HOME || `${process.env.HOME || "/tmp"}/.local/share`}/opencode/continuous-workflow`
+  const key = createHash("sha256")
+    .update(JSON.stringify({ worktree, changeId: state.changeId, contractHash: state.contract.hash, fingerprint }))
+    .digest("hex")
+  return `${stateRoot}/verification-receipts/${key}.json`
+}
+
+function persistVerificationReceipt(state: WorkflowState, worktree: string, receipt: TaskReceipt): void {
+  try {
+    const path = verificationReceiptPath(state, worktree, receipt.fingerprint)
+    mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true })
+    writeFileSync(path, JSON.stringify(receipt), "utf8")
+  } catch {}
+}
+
+function persistedVerificationReceipt(state: WorkflowState, worktree: string, fingerprint: string): TaskReceipt | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(verificationReceiptPath(state, worktree, fingerprint), "utf8"))
+    return parsed?.fingerprint === fingerprint && typeof parsed?.output === "string" ? parsed as TaskReceipt : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function userConfirmationPath(state: WorkflowState, worktree: string): string {
   const stateRoot = process.env.CONTINUOUS_WORKFLOW_STATE_DIR
     || `${process.env.XDG_STATE_HOME || `${process.env.HOME || "/tmp"}/.local/share`}/opencode/continuous-workflow`
@@ -283,6 +309,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
   const lastUserMessages = new Map<string, UserConfirmation>()
   const taskSnapshots = new Map<string, TaskSnapshot>()
   const implementationReceipts = new Map<string, TaskReceipt>()
+  const verificationReceipts = new Map<string, TaskReceipt>()
   const reviewReceipts = new Map<string, TaskReceipt>()
 
   function agentFor(input: any): string | undefined {
@@ -296,6 +323,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       lastUserMessages.clear()
       taskSnapshots.clear()
       implementationReceipts.clear()
+      verificationReceipts.clear()
       reviewReceipts.clear()
     },
 
@@ -306,6 +334,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       states.delete(sessionID)
       lastUserMessages.delete(sessionID)
       implementationReceipts.delete(sessionID)
+      verificationReceipts.delete(sessionID)
       reviewReceipts.delete(sessionID)
       for (const key of taskSnapshots.keys()) if (key.startsWith(sessionID + ":")) taskSnapshots.delete(key)
     },
@@ -343,12 +372,26 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
             throw new Error("CONTINUOUS WORKFLOW GATE: completion requires a new explicit user response after the workflow became ready")
           }
         }
-        if (output.args?.operation === "transition" && output.args?.phase === "verification") {
+        if (output.args?.operation === "verification_record" && state?.mode === "assessment") {
           const current = stateRequired(state)
           const fingerprint = workflowFingerprint(current, cwd)
-          const receipt = implementationReceipts.get(input.sessionID) ?? persistedImplementationReceipt(current, cwd, fingerprint)
-          if (current.phase !== "implementation" || !receipt || receipt.fingerprint !== fingerprint) {
-            throw new Error("CONTINUOUS WORKFLOW IMPLEMENTATION RECEIPT: transition to verification requires a completed workflow-implementer task for the current tree; after recovery, delegate one reattachment task for workflow-implementer to inspect and attest the existing candidate (no lifecycle reset or rewrite)")
+          const receipt = verificationReceipts.get(input.sessionID) ?? persistedVerificationReceipt(current, cwd, fingerprint)
+          if (!receipt || receipt.fingerprint !== fingerprint) {
+            throw new Error("CONTINUOUS WORKFLOW ASSESSMENT RECEIPT: verification_record requires the completed read-only workflow-consultant assessment for the current tree")
+          }
+        }
+        if (output.args?.operation === "transition" && output.args?.phase === "verification") {
+          const current = stateRequired(state)
+          if (current.mode === "assessment") {
+            if (current.phase !== "planning" || current.verificationPlan.status !== "planned" || current.verificationPlan.owner !== "workflow-consultant") {
+              throw new Error("CONTINUOUS WORKFLOW ASSESSMENT RECEIPT: transition to verification requires the recorded read-only assessment plan owned by workflow-consultant")
+            }
+          } else {
+            const fingerprint = workflowFingerprint(current, cwd)
+            const receipt = implementationReceipts.get(input.sessionID) ?? persistedImplementationReceipt(current, cwd, fingerprint)
+            if (current.phase !== "implementation" || !receipt || receipt.fingerprint !== fingerprint) {
+              throw new Error("CONTINUOUS WORKFLOW IMPLEMENTATION RECEIPT: transition to verification requires a completed workflow-implementer task for the current tree; after recovery, delegate one reattachment task for workflow-implementer to inspect and attest the existing candidate (no lifecycle reset or rewrite)")
+            }
           }
         }
         if (output.args?.operation === "review_record") {
@@ -382,6 +425,9 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         let taskKind: TaskSnapshot["kind"] = "consultation"
 
         if (base === IMPLEMENTER) {
+          if (current.mode === "assessment") {
+            throw new Error("CONTINUOUS WORKFLOW ASSESSMENT GATE: an assessment is read-only; do not delegate workflow-implementer unless the user explicitly requests implementation and the Lead first enters implementation mode")
+          }
           if (current.phase === "verification") {
             if (current.verificationPlan.status !== "planned") throw new Error("CONTINUOUS WORKFLOW VERIFICATION GATE: record the verification plan before delegating verification")
             taskKind = "verification"
@@ -405,10 +451,16 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           if (!preContractDiscovery && current.contract.status !== "approved") {
             throw new Error("CONTINUOUS WORKFLOW CONSULTATION GATE: approve the functional contract before specialist delegation outside pre-contract discovery")
           }
-          taskKind = preContractDiscovery ? "discovery" : "consultation"
+          const assessmentVerification = current.mode === "assessment"
+            && current.phase === "verification"
+            && current.verification.status === "missing"
+            && current.verificationPlan.status === "planned"
+            && current.verificationPlan.owner === "workflow-consultant"
+            && base === "workflow-consultant"
+          taskKind = preContractDiscovery ? "discovery" : assessmentVerification ? "verification" : "consultation"
           output.args.prompt = `${String(output.args.prompt ?? "")}${preContractDiscovery
             ? discoveryPrompt(current, fingerprint)
-            : packagePrompt(current, "consultation", fingerprint)}`
+            : packagePrompt(current, assessmentVerification ? "verification" : "consultation", fingerprint)}`
         }
 
         taskSnapshots.set(key, { subagent: base, kind: taskKind, fingerprint, artifactPaths: current.verificationPlan.artifactPaths, contractHash: contractHash(current, cwd), contractPath: current.contract.path })
@@ -425,10 +477,12 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           }
           if (current.status !== "active") throw new Error(`CONTINUOUS WORKFLOW CONTRACT GATE: contract cannot be edited while workflow status is ${current.status}`)
           const branch = currentBranch(cwd)
-          if (current.delivery.status !== "prepared" || current.delivery.worktree !== cwd || current.delivery.branch !== branch || isProtectedBranch(branch)) {
+          if (current.mode !== "assessment" && (current.delivery.status !== "prepared" || current.delivery.worktree !== cwd || current.delivery.branch !== branch || isProtectedBranch(branch))) {
             throw new Error("CONTINUOUS WORKFLOW DELIVERY GATE: prepare and record a non-protected branch/worktree before editing the functional contract")
           }
         } else if (isImplementer(agent)) {
+          const current = state
+          if (current?.mode === "assessment") throw new Error("CONTINUOUS WORKFLOW ASSESSMENT GATE: workflow-implementer is not allowed to mutate an assessment")
           const relative = paths.map((path) => projectRelative(path, cwd))
           if (relative.some((path) => path.startsWith("workflow/contracts/"))) throw new Error("CONTINUOUS WORKFLOW IMPLEMENTER GATE: implementer cannot modify functional contracts")
           const branch = currentBranch(cwd)
@@ -496,6 +550,11 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         reviewReceipts.delete(input.sessionID)
         output.output = `${output.output}\n\n[Continuous Workflow] Candidate tree fingerprint after implementation: ${after}. The Lead must inspect the actual diff before transitioning to verification.`
       }
+      if (snapshot.kind === "verification" && current) {
+        const receipt = { fingerprint: after, output: String(output.output ?? "") }
+        verificationReceipts.set(input.sessionID, receipt)
+        persistVerificationReceipt(current, cwd, receipt)
+      }
       if (snapshot.subagent === REVIEWER) {
         const receipt = { fingerprint: after, output: String(output.output ?? "") }
         reviewReceipts.set(input.sessionID, receipt)
@@ -508,6 +567,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       if (!isLead(agent)) return
       states.delete(input.sessionID)
       implementationReceipts.delete(input.sessionID)
+      verificationReceipts.delete(input.sessionID)
       reviewReceipts.delete(input.sessionID)
       output.context.push(
         "CONTINUOUS WORKFLOW V2 RECOVERY: canonical state cache was cleared by compaction. Call workflow_state operation=status before any delegation or mutation. Do not edit application code directly; only workflow-implementer owns implementation.",

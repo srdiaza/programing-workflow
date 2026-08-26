@@ -21,27 +21,26 @@ This skill applies only to `workflow-lead`, its generated profiles, and the `wor
 
 The Lead must read status before acting, pass the latest `expected_version` to every mutation, recover the same change after restart, and never replace missing state with a new change ID.
 
+## Request classification
+
+Not every user request asks for code. At `start`, record `workflow_mode: assessment` for investigation, comparison, diagnosis, impact analysis, clarification, or recommendation requests. Use `workflow_mode: implementation` only when the user explicitly asks to add, change, fix, migrate, remove, or otherwise alter application behavior. If an assessment later becomes an implementation, use `workflow_state operation: mode_set workflow_mode: implementation` only after the user explicitly requests applying the change. Never change modes merely to satisfy a gate.
+
 ## Evidence tools
 
 - Engram persistence is owned through `workflow_state`. Subagents do not write Engram.
 - Use CodeGraph for structural questions when a valid index already exists. Read-only subagents must never initialize, sync, repair, or mutate `.codegraph`; they fall back to `rg`, repository reads, and Git inspection while disclosing the limitation.
 - Use Context7 when an external library/framework/API claim materially depends on current documentation. If unavailable, mark only that claim unverified; unrelated repository work may continue.
-- Tests, architecture checks, tenant checks, migration checks, linters, and other non-destructive validation run automatically under the recorded verification plan. Focused verification is the default. A complete suite is selected only for an explicit trigger (project rule, migrations/models, shared contract, auth/tenant/accounting core, dependencies/infrastructure, test/CI change, reproduced CI failure, or user request), then runs once after code is frozen by `workflow-implementer`. Lead and Reviewer do not repeat it; the Reviewer may run only a concrete focused probe. Never clean a worktree to make validation pass: declared untracked test artifacts are preserved and excluded only from the untracked fingerprint; tracked or undeclared changes remain reviewable.
+- Tests, architecture checks, tenant checks, migration checks, linters, and other non-destructive validation run automatically under the recorded verification plan. Focused verification is the default. A complete suite is selected only for an explicit trigger (project rule, migrations/models, shared contract, auth/tenant/accounting core, dependencies/infrastructure, test/CI change, reproduced CI failure, or user request), then runs once after code is frozen by `workflow-implementer`. Lead and Reviewer do not repeat it; the Reviewer may run only a concrete focused probe. For `assessment`, the plan is read-only, is owned by `workflow-consultant`, and does not require implementation, delivery preparation, or an Implementer receipt. Never clean a worktree to make validation pass: declared untracked test artifacts are preserved and excluded only from the untracked fingerprint; tracked or undeclared changes remain reviewable.
 
 ## Enforced lifecycle
 
-1. Status/start and read-only inspection.
-2. Non-protected delivery branch/worktree recorded with `delivery_prepare`.
-3. Functional contract drafted, fully presented, and explicitly approved at its exact hash.
-4. Atomic current/future/non-goal capabilities recorded.
-5. Relevant specialist consultation and Lead reconciliation.
-6. Plain-language implementation brief presented and recorded.
-7. Verification plan recorded: tier, explicit reason, exact checks, and `workflow-implementer` as the sole execution owner.
-8. Implementation delegated to `workflow-implementer`; the Lead inspects the actual diff.
-9. Verification recorded against the current tree fingerprint.
-10. Independent review against that same fingerprint.
-11. Findings enter the correction loop: direct `verification → implementation → verification`, affected checks only, then a fresh review. The initial contract/capability/brief gates remain intact unless scope changes.
-12. `ready`, explicit user confirmation, then `complete`.
+Common: status/start with an explicit mode, read-only discovery, functional contract drafted/presented/approved at its exact hash, capability matrix recorded, and specialist findings reconciled.
+
+Assessment track: record a focused read-only verification plan owned by `workflow-consultant`, transition directly `planning → verification`, delegate the evidence plan, record evidence, run an independent Reviewer review, present the recommendation, then await explicit confirmation to complete. Do not prepare an implementation branch, present an implementation brief, delegate `workflow-implementer`, or run implementation gates.
+
+Implementation track: record a non-protected delivery branch/worktree, present and record the implementation brief, record the verification plan owned by `workflow-implementer`, transition to implementation, delegate the approved package, inspect the diff, record verification, run independent review, enter the correction loop when needed, then `ready`, explicit user confirmation, and `complete`.
+
+An assessment may enter the implementation track later through explicit `mode_set`; preserve the assessment contract and findings, and do not restart discovery unnecessarily.
 
 The plugin enforces these gates. A prompt, todo, prior approval, passing build, or working partial implementation cannot bypass them.
 
@@ -58,4 +57,4 @@ Every concrete defect, regression risk, missing validation, contract mismatch, s
 
 ## Configuration
 
-`workflow-ai configure` owns the selectable workflow profile. The selected profile's model routing, consultation policy, review policy, and safe permissions apply only to this workflow. Never modify unrelated OpenCode agents, commands, skills, plugins, MCP servers, or the configured default agent.
+`workflow-ai configure` owns the selectable workflow profile. The selected profile's model routing, consultation policy, review policy, and safe permissions apply only to this workflow. Use consultants for exploration and assessment verification, and reviewers for independent read-only checks. Never modify unrelated OpenCode agents, commands, skills, plugins, MCP servers, or the configured default agent.

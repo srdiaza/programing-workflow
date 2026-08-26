@@ -6,11 +6,13 @@ export const WORKFLOW_SCHEMA = "continuous-workflow/v2" as const
 export const LEGACY_WORKFLOW_SCHEMA = "continuous-workflow/v1" as const
 export const PHASES = ["discovery", "planning", "implementation", "verification", "delivery"] as const
 export const STATUSES = ["active", "ready", "completed", "blocked", "aborted"] as const
+export const WORKFLOW_MODES = ["implementation", "assessment"] as const
 export const DELIVERY_STRATEGIES = ["single-branch", "feature-branch-chain", "stacked-prs", "single-pr-exception"] as const
 export const VERIFICATION_TIERS = ["focused", "complete"] as const
 
 export type Phase = (typeof PHASES)[number]
 export type Status = (typeof STATUSES)[number]
+export type WorkflowMode = (typeof WORKFLOW_MODES)[number]
 export type DeliveryStrategy = (typeof DELIVERY_STRATEGIES)[number]
 export type VerificationTier = (typeof VERIFICATION_TIERS)[number]
 
@@ -64,6 +66,7 @@ export type WorkflowState = {
   worktree: string
   goal: string
   acceptanceCriteria: string[]
+  mode: WorkflowMode
   phase: Phase
   status: Status
   profile?: string
@@ -100,7 +103,7 @@ export type WorkflowState = {
   verificationPlan: {
     status: "missing" | "planned"
     tier?: VerificationTier
-    owner: "workflow-implementer" | ""
+    owner: "workflow-implementer" | "workflow-consultant" | ""
     reason: string
     requiredChecks: string[]
     artifactPaths: string[]
@@ -137,6 +140,7 @@ export function normalizeWorkflowState(value: unknown): WorkflowState | null {
     const current = candidate as WorkflowState
     return {
       ...current,
+      mode: current.mode === "assessment" ? "assessment" : "implementation",
       verificationPlan: { ...(current.verificationPlan ?? { status: "missing", owner: "", reason: "", requiredChecks: [] }), artifactPaths: current.verificationPlan?.artifactPaths ?? [] },
     }
   }
@@ -146,6 +150,7 @@ export function normalizeWorkflowState(value: unknown): WorkflowState | null {
   return {
     ...legacy,
     schema: WORKFLOW_SCHEMA,
+    mode: "implementation",
     contract: {
       path: expectedContractPath(legacy.changeId),
       version: 0,
@@ -224,8 +229,22 @@ export function implementationGateErrors(state: WorkflowState, worktree: string)
   return errors
 }
 
+export function assessmentGateErrors(state: WorkflowState, worktree: string): string[] {
+  const errors: string[] = []
+  if (state.status !== "active") errors.push(`workflow status must be active (current: ${state.status})`)
+  if (state.mode !== "assessment") errors.push(`workflow mode must be assessment (current: ${state.mode})`)
+  if (state.contract.status !== "approved" || !state.contract.hash) errors.push("approved functional assessment contract is missing")
+  if (state.verificationPlan.status !== "planned" || !state.verificationPlan.tier || state.verificationPlan.owner !== "workflow-consultant" || !state.verificationPlan.reason || state.verificationPlan.requiredChecks.length === 0) {
+    errors.push("assessment verification plan is missing, incomplete, or has no workflow-consultant owner")
+  }
+  if (state.phase !== "verification" && state.phase !== "delivery") errors.push(`assessment must be in verification or delivery phase (current: ${state.phase})`)
+  const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
+  if (state.verification.status !== "passed" || state.verification.treeFingerprint !== fingerprint) errors.push("assessment verification is missing or stale for the current tree")
+  return errors
+}
+
 export function readyGateErrors(state: WorkflowState, worktree: string): string[] {
-  const errors = implementationGateErrors(state, worktree)
+  const errors = state.mode === "assessment" ? assessmentGateErrors(state, worktree) : implementationGateErrors(state, worktree)
   if (state.phase !== "verification" && state.phase !== "delivery") errors.push(`workflow phase must be verification or delivery (current: ${state.phase})`)
   const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
   if (state.verification.status !== "passed" || state.verification.treeFingerprint !== fingerprint) errors.push("verification is missing or stale for the current tree")

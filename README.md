@@ -125,16 +125,17 @@ For a larger request, include the desired result, important constraints, and how
 
 ### 5. Let the workflow run
 
-For the first request in a project, the Lead works through these stages:
+For the first request in a project, the Lead first classifies the request as `assessment` or `implementation`:
 
-1. **Discovery and delivery setup** — reads the project rules and current behavior, then prepares a non-protected branch/worktree. Implementation on `main` or `master` is forbidden.
+1. **Discovery** — reads the project rules and current behavior and delegates read-only fact-finding when useful.
 2. **Functional contract** — writes `workflow/contracts/<change-id>.md` in business language, presents the complete version, and waits for explicit user approval of its exact hash.
-3. **Capabilities and consultation** — separates every current behavior, future direction, and non-goal into observable capabilities, then asks relevant read-only specialists for evidence.
-4. **Implementation brief** — explains what will change, remain possible, stay excluded, and how each capability will be proven.
-5. **Verification plan and implementation** — the Lead records whether the change needs focused or complete verification, why, and the exact commands. It then delegates the approved package to `workflow-implementer`, which is the sole owner of running any complete suite once after code is frozen. The Lead cannot edit application code and must inspect the resulting diff.
-6. **Verification and review** — records planned test and functional evidence for the current tree fingerprint, then delegates an independent review of that same tree. The Reviewer does not rerun the complete suite; it uses a focused probe only to resolve a concrete evidence gap.
-7. **Correction loop** — every concrete finding blocks delivery, regardless of severity or whether it was pre-existing. Corrections move directly from verification to the Implementer and back to verification; the approved contract, capability matrix, brief, delivery setup, and earlier evidence remain in force. Only checks affected by the correction are replanned, unless its risk requires the complete suite. Discovery, contract approval, and initial setup reopen only for a material scope change.
-8. **Ready and Completed** — `ready` waits for explicit user confirmation; `complete` is allowed only afterward.
+3. **Capabilities and consultation** — separates every current behavior, future direction, and non-goal into observable capabilities, then reconciles relevant read-only specialist evidence.
+
+For an **assessment**, the Lead records a focused read-only verification plan owned by `workflow-consultant`, transitions directly to verification, and obtains an independent Reviewer review. It does not prepare an implementation branch, present an implementation brief, delegate `workflow-implementer`, or modify application code. The result is a recommendation and its evidence. If the user later asks to apply it, the same change can enter implementation mode through an explicit `mode_set` operation without restarting discovery.
+
+For an **implementation**, the Lead prepares a non-protected branch/worktree, presents the implementation brief, records the verification plan, and delegates the approved package to `workflow-implementer`, which is the sole owner of application-code authorship and any complete suite. The Lead cannot edit application code and must inspect the resulting diff. Verification and independent review then operate on the current tree fingerprint.
+
+Every concrete finding blocks delivery, regardless of severity or whether it was pre-existing. Implementation corrections move directly from verification to the Implementer and back to verification; the approved contract, capability matrix, brief, delivery setup, and earlier evidence remain in force. Only checks affected by the correction are replanned, unless its risk requires the complete suite. `ready` waits for explicit user confirmation; `complete` is allowed only afterward.
 
 The state and checkpoints are kept in Engram, so a restart or compaction does not make the Lead start from memory alone.
 
