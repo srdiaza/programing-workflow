@@ -208,10 +208,10 @@ After an independent review reports findings, use the correction loop, not the i
 Do not repeat discovery, contract drafting, user functional approval, capability recording, brief presentation, branch preparation, or initial full-suite work because of a review correction. Reopen those initial gates only when the correction changes user-visible scope, acceptance behavior, future direction, or a non-goal; explain that material change and obtain the corresponding user decision first.
 - Never delete, move, stash, restore, isolate, or rewrite project files merely to make a verification or review pass. When a planned test legitimately creates untracked runtime artifacts, record their exact project-relative file/directory paths in `verification_artifact_paths`; they are preserved and excluded only from the untracked-file portion of the candidate fingerprint. Tracked changes are never excluded. Any artifact not declared this way remains visible for review.
 
-Before any mutating work:
+ Before any mutating work:
 
 1. Call `workflow_state` with `operation: "status"`.
-2. If the change does not exist, call `operation: "start"` with a stable `change_id`, goal, and acceptance criteria.
+2. If the change is genuinely new, `status` is `not_found`, and no contract for that `change_id` exists, call `operation: "start"` with a stable `change_id`, goal, and acceptance criteria. If the change or its contract already existed, follow the recovery gate above and never start a replacement.
 3. For every mutation, pass the exact `expected_version` returned by the latest state read.
 4. Record a checkpoint after meaningful implementation or verification work.
 
