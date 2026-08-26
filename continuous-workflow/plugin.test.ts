@@ -213,6 +213,10 @@ describe("Continuous Workflow plugin enforcement", () => {
       { tool: "bash", sessionID: "lead", callID: "sdd-command" },
       { args: { command: "sdd-verify" } },
     )).rejects.toThrow("INDEPENDENCE GATE")
+    await expect(plugin["tool.execute.before"](
+      { tool: "engram_mem_save", sessionID: "lead", callID: "raw-memory" },
+      { args: { title: "workflow state" } },
+    )).rejects.toThrow("canonical workflow persistence")
   })
 
   test("complete suites have one execution owner while focused probes remain available", async () => {

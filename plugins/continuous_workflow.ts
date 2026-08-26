@@ -356,6 +356,10 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       if (!isLead(agent) && !isImplementer(agent) && !isReviewer(agent)) return
       const state = states.get(input.sessionID)
 
+      if (isLead(agent) && /^engram_mem_/.test(input.tool)) {
+        throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: use workflow_state for canonical workflow persistence; raw engram_mem_* tools are not part of this workflow")
+      }
+
       if (input.tool === "workflow_state") {
         if (!isLead(agent)) throw new Error("CONTINUOUS WORKFLOW GATE: only workflow-lead may mutate or read canonical workflow_state")
         if (output.args?.operation === "contract_approve" || output.args?.operation === "contract_metadata_reconcile") {

@@ -149,6 +149,28 @@ function topicFor(changeId: string): string {
   return `workflow/${changeId}`
 }
 
+function stateMirrorPath(project: string, changeId: string): string {
+  const digest = createHash("sha256").update(`${project}\0${changeId}`).digest("hex")
+  return pathJoin(stateRoot(), "states", `${digest}.json`)
+}
+
+function mirrorState(state: WorkflowState): void {
+  try {
+    const path = stateMirrorPath(state.project, state.changeId)
+    mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true })
+    writeFileSync(path, JSON.stringify(state), "utf8")
+  } catch {}
+}
+
+function mirroredState(project: string, changeId: string): WorkflowState | null {
+  try {
+    const state = normalizeWorkflowState(JSON.parse(readFileSync(stateMirrorPath(project, changeId), "utf8")))
+    return state?.project === project && state.changeId === changeId ? state : null
+  } catch {
+    return null
+  }
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -204,15 +226,26 @@ async function loadState(project: string, changeId: string): Promise<{ state: Wo
   const query = new URLSearchParams({ project, scope: "project", limit: "200", sort: "created_at:desc" })
   const rows = observationsFrom(await engramFetch(`/observations?${query.toString()}`))
     .filter((row) => row.topic_key === topicFor(changeId))
-    .sort((a, b) => String(b.updated_at ?? b.created_at ?? "").localeCompare(String(a.updated_at ?? a.created_at ?? "")))
+  const candidates: { state: WorkflowState; id?: number; migrated: boolean; at: number }[] = []
   for (const row of rows) {
     if (!row.content) continue
     try {
       const raw = JSON.parse(row.content)
       const state = normalizeWorkflowState(raw)
-      if (state?.changeId === changeId) return { state, id: typeof row.id === "number" ? row.id : undefined, migrated: raw.schema !== WORKFLOW_SCHEMA }
+      if (state?.project === project && state.changeId === changeId) {
+        const stateAt = Date.parse(state.updatedAt)
+        const rowAt = Date.parse(String(row.updated_at ?? row.created_at ?? ""))
+        candidates.push({ state, id: typeof row.id === "number" ? row.id : undefined, migrated: raw.schema !== WORKFLOW_SCHEMA, at: Number.isFinite(stateAt) ? stateAt : Number.isFinite(rowAt) ? rowAt : 0 })
+      }
     } catch {}
   }
+  const local = mirroredState(project, changeId)
+  if (local) {
+    const stateAt = Date.parse(local.updatedAt)
+    candidates.push({ state: local, migrated: false, at: Number.isFinite(stateAt) ? stateAt : 0 })
+  }
+  candidates.sort((a, b) => b.at - a.at)
+  if (candidates[0]) return candidates[0]
   return null
 }
 
@@ -223,12 +256,14 @@ async function persistState(project: string, sessionID: string, state: WorkflowS
       method: "PATCH",
       body: { title: `Workflow ${state.changeId}`, content, type: "config", scope: "project", topic_key: topicFor(state.changeId) },
     })
+    mirrorState(state)
     return { id: typeof body?.id === "number" ? body.id : observationID }
   }
   const body = await engramFetch("/observations", {
     method: "POST",
     body: { session_id: sessionID, type: "config", title: `Workflow ${state.changeId}`, content, project, scope: "project", topic_key: topicFor(state.changeId), tool_name: "workflow_state" },
   })
+  mirrorState(state)
   return { id: typeof body?.id === "number" ? body.id : undefined }
 }
 
@@ -384,20 +419,32 @@ export default tool({
     const project = projectFrom(worktree)
     const operation = args.operation
     const summary = asText(args.summary)
-    await ensureEngram()
-    await ensureSession(context.sessionID, project, context.directory)
 
     if (operation === "status") {
-      const current = await loadState(project, changeId)
-      if (!current) return { title: `workflow ${changeId}`, output: JSON.stringify({ status: "not_found", project, changeId }, null, 2), metadata: { status: "not_found", changeId, project } }
-      return result(current.state, current.migrated ? "Current workflow state (legacy v1 loaded as v2; next mutation will persist the migration)" : "Current workflow state")
+      try {
+        await ensureEngram()
+        await ensureSession(context.sessionID, project, context.directory)
+        const current = await loadState(project, changeId)
+        if (!current) return { title: `workflow ${changeId}`, output: JSON.stringify({ status: "not_found", project, changeId }, null, 2), metadata: { status: "not_found", changeId, project } }
+        mirrorState(current.state)
+        return result(current.state, current.migrated ? "Current workflow state (legacy v1 loaded as v2; next mutation will persist the migration)" : "Current workflow state")
+      } catch (error) {
+        const local = mirroredState(project, changeId)
+        if (!local) throw error
+        return result(local, "Current workflow state (local durable mirror; Engram was unavailable)")
+      }
     }
 
+    await ensureEngram()
+    await ensureSession(context.sessionID, project, context.directory)
     requireLead(context.agent, operation)
     return withChangeLock(project, changeId, async () => {
       const current = await loadState(project, changeId)
       if (operation === "start") {
         if (current) throw new Error(`change ${changeId} already exists at version ${current.state.version}`)
+        let contractExists = false
+        try { contractExists = statSync(pathJoin(worktree, expectedContractPath(changeId))).isFile() } catch {}
+        if (contractExists) throw new Error(`change ${changeId} has an existing contract but no durable workflow state; do not start a replacement, recover or inspect the same project/worktree first`)
         const goal = asText(args.goal)
         if (!goal) throw new Error("goal is required for start")
         const workflowMode = args.workflow_mode as WorkflowMode | undefined
@@ -434,7 +481,7 @@ export default tool({
         return result(state, `Started workflow ${changeId} (observation ${saved.id ?? "unknown"})`)
       }
 
-      if (!current) throw new Error(`change ${changeId} does not exist; run operation=start first`)
+      if (!current) throw new Error(`change ${changeId} has no durable state for project ${project} in worktree ${worktree}; verify the same project/worktree before starting a replacement`)
       let state = current.state
       requireExpected(state, args.expected_version)
 
