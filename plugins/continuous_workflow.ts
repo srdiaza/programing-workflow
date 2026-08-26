@@ -28,6 +28,7 @@ const READ_ONLY_SUBAGENTS = new Set([
 
 type TaskSnapshot = {
   subagent: string
+  kind: "implementation" | "verification" | "review" | "consultation" | "discovery"
   fingerprint: string
   artifactPaths: string[]
   contractHash: string
@@ -243,7 +244,7 @@ function externalWorkflowInvocation(value: string): boolean {
   return /\b(?:gentle-ai|sdd(?:[-_][a-z0-9_-]+)?|openspec)\b/i.test(value)
 }
 
-function packagePrompt(state: WorkflowState, kind: "implementation" | "review" | "consultation", fingerprint: string): string {
+function packagePrompt(state: WorkflowState, kind: "implementation" | "verification" | "review" | "consultation", fingerprint: string): string {
   const packageData = {
     schema: state.schema,
     change_id: state.changeId,
@@ -255,7 +256,9 @@ function packagePrompt(state: WorkflowState, kind: "implementation" | "review" |
     candidate_tree_fingerprint: fingerprint,
     authority: kind === "implementation"
       ? "Implement exactly this approved package. Do not reinterpret, narrow, or modify the contract."
-      : "Inspect against this approved package. Report verified findings and optional suggestions separately.",
+      : kind === "verification"
+        ? "Execute only the recorded verification plan. Do not edit source, contracts, or Git state; do not delete, move, restore, or stash files. Declared untracked test artifacts are allowed and must be preserved. Report commands and evidence."
+        : "Inspect against this approved package. Report verified findings and optional suggestions separately.",
   }
   return `\n\n## Continuous Workflow enforced package\n\`\`\`json\n${JSON.stringify(packageData, null, 2)}\n\`\`\`\n`
 }
@@ -372,29 +375,39 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         const base = baseAgent(requested)
         const fingerprint = workflowFingerprint(current, cwd)
         const key = `${input.sessionID}:${input.callID}`
+        let taskKind: TaskSnapshot["kind"] = "consultation"
 
         if (base === IMPLEMENTER) {
-          const errors = implementationGateErrors(current, cwd)
-          if (current.phase !== "implementation") errors.push(`workflow phase must be implementation (current: ${current.phase})`)
-          if (errors.length) throw new Error(`CONTINUOUS WORKFLOW IMPLEMENTER GATE: ${errors.join("; ")}`)
-          output.args.prompt = `${String(output.args.prompt ?? "")}${packagePrompt(current, "implementation", fingerprint)}`
+          if (current.phase === "verification") {
+            if (current.verificationPlan.status !== "planned") throw new Error("CONTINUOUS WORKFLOW VERIFICATION GATE: record the verification plan before delegating verification")
+            taskKind = "verification"
+            output.args.prompt = `${String(output.args.prompt ?? "")}${packagePrompt(current, "verification", fingerprint)}`
+          } else {
+            const errors = implementationGateErrors(current, cwd)
+            if (current.phase !== "implementation") errors.push(`workflow phase must be implementation (current: ${current.phase})`)
+            if (errors.length) throw new Error(`CONTINUOUS WORKFLOW IMPLEMENTER GATE: ${errors.join("; ")}`)
+            taskKind = "implementation"
+            output.args.prompt = `${String(output.args.prompt ?? "")}${packagePrompt(current, "implementation", fingerprint)}`
+          }
         } else if (base === REVIEWER) {
           if (current.phase !== "verification") throw new Error("CONTINUOUS WORKFLOW REVIEW GATE: reviewer may run only after implementation in verification phase")
           if (current.verification.status !== "passed" || current.verification.treeFingerprint !== fingerprint) {
             throw new Error("CONTINUOUS WORKFLOW REVIEW GATE: current-tree verification must be recorded before reviewer delegation")
           }
+          taskKind = "review"
           output.args.prompt = `${String(output.args.prompt ?? "")}${packagePrompt(current, "review", fingerprint)}`
         } else if (READ_ONLY_SUBAGENTS.has(base)) {
           const preContractDiscovery = current.phase === "discovery" && current.contract.status === "missing"
           if (!preContractDiscovery && current.contract.status !== "approved") {
             throw new Error("CONTINUOUS WORKFLOW CONSULTATION GATE: approve the functional contract before specialist delegation outside pre-contract discovery")
           }
+          taskKind = preContractDiscovery ? "discovery" : "consultation"
           output.args.prompt = `${String(output.args.prompt ?? "")}${preContractDiscovery
             ? discoveryPrompt(current, fingerprint)
             : packagePrompt(current, "consultation", fingerprint)}`
         }
 
-        taskSnapshots.set(key, { subagent: base, fingerprint, artifactPaths: current.verificationPlan.artifactPaths, contractHash: contractHash(current, cwd), contractPath: current.contract.path })
+        taskSnapshots.set(key, { subagent: base, kind: taskKind, fingerprint, artifactPaths: current.verificationPlan.artifactPaths, contractHash: contractHash(current, cwd), contractPath: current.contract.path })
         return
       }
 
@@ -469,10 +482,10 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       if (snapshot.contractHash && currentContractHash !== snapshot.contractHash) {
         throw new Error(`CONTINUOUS WORKFLOW CONTRACT INTEGRITY: ${snapshot.subagent} modified the approved contract ${snapshot.contractPath}`)
       }
-      if (READ_ONLY_SUBAGENTS.has(snapshot.subagent) && changed) {
+      if ((READ_ONLY_SUBAGENTS.has(snapshot.subagent) || snapshot.kind === "verification") && changed) {
         throw new Error(`CONTINUOUS WORKFLOW READ-ONLY VIOLATION: ${snapshot.subagent} changed the project tree; workflow-lead must inspect and resolve the unexpected mutation`)
       }
-      if (snapshot.subagent === IMPLEMENTER) {
+      if (snapshot.subagent === IMPLEMENTER && snapshot.kind === "implementation") {
         const receipt = { fingerprint: after, output: String(output.output ?? "") }
         implementationReceipts.set(input.sessionID, receipt)
         if (current) persistImplementationReceipt(current, cwd, receipt)

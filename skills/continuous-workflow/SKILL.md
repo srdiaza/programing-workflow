@@ -40,7 +40,7 @@ The Lead must read status before acting, pass the latest `expected_version` to e
 8. Implementation delegated to `workflow-implementer`; the Lead inspects the actual diff.
 9. Verification recorded against the current tree fingerprint.
 10. Independent review against that same fingerprint.
-11. All findings corrected by the Implementer, followed by a newly planned verification and fresh review.
+11. Findings enter the correction loop: direct `verification → implementation → verification`, affected checks only, then a fresh review. The initial contract/capability/brief gates remain intact unless scope changes.
 12. `ready`, explicit user confirmation, then `complete`.
 
 The plugin enforces these gates. A prompt, todo, prior approval, passing build, or working partial implementation cannot bypass them.

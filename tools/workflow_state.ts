@@ -513,7 +513,7 @@ export default tool({
           state.implementationBrief = { status: "presented", contractHash: state.contract.hash, summary: brief, presentedAt: state.updatedAt }
           state.nextAction = nextAction || "Record the verification plan, then transition to implementation and delegate the approved package to workflow-implementer"
         } else if (operation === "verification_plan") {
-          if (state.phase !== "planning") throw new Error("verification plan can only be recorded in planning phase")
+          if (state.phase !== "planning" && state.phase !== "verification") throw new Error("verification plan can only be recorded in planning or verification phase")
           if (state.contract.status !== "approved") throw new Error("approve the contract before recording the verification plan")
           if (state.implementationBrief.status !== "presented" || state.implementationBrief.contractHash !== state.contract.hash) throw new Error("present the current implementation brief before recording the verification plan")
           const tier = args.verification_tier

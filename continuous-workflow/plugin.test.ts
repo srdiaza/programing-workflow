@@ -226,6 +226,32 @@ describe("Continuous Workflow plugin enforcement", () => {
     await expect(plugin["tool.execute.before"](transition, transitionOutput)).resolves.toBeUndefined()
   })
 
+  test("verification can delegate a read-only Implementer without reopening implementation", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    const verified = state(repo.cwd, repo.contractHash, "verification")
+    await cacheState(plugin, "lead", verified)
+    const output = { args: { subagent_type: "workflow-implementer", prompt: "run recorded checks" } }
+    await expect(plugin["tool.execute.before"](
+      { tool: "task", sessionID: "lead", callID: "verify-only" },
+      output,
+    )).resolves.toBeUndefined()
+    expect(output.args.prompt).toContain("Execute only the recorded verification plan")
+  })
+
+  test("verification-only Implementer cannot mutate the candidate", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    await cacheState(plugin, "lead", state(repo.cwd, repo.contractHash, "verification"))
+    const input = { tool: "task", sessionID: "lead", callID: "verify-read-only" }
+    const output = { args: { subagent_type: "workflow-implementer", prompt: "run recorded checks" } }
+    await plugin["tool.execute.before"](input, output)
+    writeFileSync(`${repo.cwd}/app.txt`, "unexpected verification mutation\n")
+    await expect(plugin["tool.execute.after"](input, output)).rejects.toThrow("READ-ONLY VIOLATION")
+  })
+
   test("implementation receipt survives compaction", async () => {
     const repo = repository()
     const receiptStateRoot = mkdtempSync(`${tmpdir()}/continuous-workflow-implementation-receipt-`)

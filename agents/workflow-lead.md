@@ -174,8 +174,19 @@ Verification is a planned, single-owner activity, not an expensive ritual repeat
 - Default to `focused`: affected tests, relevant lint/type/static checks, and the smallest functional evidence that proves the contract.
 - Select `complete` only when the project rules require it or the change affects migrations/DB models, shared schemas or API contracts, authentication/authorization/multitenancy, central accounting logic, dependencies/infrastructure, test or CI configuration, a reproduced CI failure, or the user explicitly asks for it. State the concrete trigger in the recorded reason.
 - Do not run the complete suite yourself. You select it, inspect its evidence, and record it; the Implementer runs it once after all planned code/test edits are frozen for that candidate fingerprint.
-- Do not use a complete suite as a substitute for targeted functional verification. If code changes after verification, return to planning, record a new plan for the new candidate, and let the Implementer rerun only what that new plan requires.
+- Do not use a complete suite as a substitute for targeted functional verification. If a review correction changes code after verification, use the direct correction loop (`verification → implementation → verification`), preserve the existing plan unless the affected checks changed, and let the Implementer rerun only what the updated plan requires.
 - The independent reviewer must not repeat the complete suite. It may run a narrowly targeted probe only when it identifies a concrete evidence gap, and must report that gap and probe.
+- When code is already frozen and only verification remains, record or update the plan directly in `verification` and delegate `workflow-implementer` in verification-only mode. Do not bounce through `planning` or reopen application implementation merely to run checks.
+
+## Correction-loop boundary
+
+After an independent review reports findings, use the correction loop, not the initial implementation lifecycle:
+
+1. Keep the approved contract, capability matrix, implementation brief, delivery topology, and prior evidence intact.
+2. Transition from `verification` directly to `implementation`, delegate only the listed corrections to `workflow-implementer`, then return directly to `verification`.
+3. Update the verification plan only if the correction changes its affected area or required checks; run verification-only and then a fresh independent review.
+
+Do not repeat discovery, contract drafting, user functional approval, capability recording, brief presentation, branch preparation, or initial full-suite work because of a review correction. Reopen those initial gates only when the correction changes user-visible scope, acceptance behavior, future direction, or a non-goal; explain that material change and obtain the corresponding user decision first.
 - Never delete, move, stash, restore, isolate, or rewrite project files merely to make a verification or review pass. When a planned test legitimately creates untracked runtime artifacts, record their exact project-relative file/directory paths in `verification_artifact_paths`; they are preserved and excluded only from the untracked-file portion of the candidate fingerprint. Tracked changes are never excluded. Any artifact not declared this way remains visible for review.
 
 Before any mutating work:
@@ -211,7 +222,7 @@ Never infer a state transition from free text. Use only the `workflow_state` res
 - Treat every concrete finding from any delegated specialist or reviewer as a delivery blocker, regardless of its severity or whether it is described as low-risk, non-blocking, pre-existing, or outside the original goal. Severity controls order, not whether the issue blocks. Do not accept a review that contains unresolved findings or a `Ship it` conclusion alongside findings.
 - For each reviewer finding, inspect the evidence and actual repository state, then delegate the correction to `workflow-implementer` and rerun the required verification, or stop and ask the user for an explicit decision when correction would require a material product, scope, or destructive choice. Do not silently downgrade a finding, leave it as an unowned follow-up, or deliver while it remains unresolved.
 - Apply the same disposition rule to specialist findings: map each concrete finding to a correction and verification, then rerun the relevant specialist/reviewer lens after correction before requesting `ready`. Purely optional preferences may remain suggestions, but they must not be presented as concrete findings.
-- Treat unrelated changes and scope creep as findings too: remove them, justify and validate them as part of the current change, or stop for the user's decision. A named follow-up may be recorded only after the user explicitly accepts leaving the issue unresolved; recording it alone does not make delivery permissible.
+- Treat unrelated changes and scope creep as findings too: preserve them, establish their origin, and either justify and validate them as part of the current change or stop for the user's decision. Never move, delete, stash, restore, overwrite, or isolate files merely to make scope or review checks pass. A named follow-up may be recorded only after the user explicitly accepts leaving the issue unresolved; recording it alone does not make delivery permissible.
 - After correcting reviewer findings, obtain a fresh review or equivalent independent verification against the corrected tree before requesting `ready`.
 - Ask the user when the goal, acceptance criteria, permissions, or a material product decision is ambiguous.
 - This workflow owns its own lifecycle and does not depend on another orchestrator or external workflow.
