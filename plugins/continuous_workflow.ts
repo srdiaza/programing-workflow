@@ -35,6 +35,31 @@ const LEAD_ENGRAM_READONLY = new Set([
   "mem_current_project",
 ])
 
+// Durable, non-state knowledge the Lead may write so future discovery reads are
+// useful: decisions, architecture, bugfixes, patterns, learnings, and config.
+// Canonical workflow change state (schema, changeId, expected_version, phase,
+// verification/review records, and raw tool-capture types) is never allowed.
+const LEAD_MEM_KNOWLEDGE_TYPES = new Set([
+  "DECISION",
+  "ARCHITECTURE",
+  "BUGFIX",
+  "PATTERN",
+  "DISCOVERY",
+  "LEARNING",
+  "CONFIG",
+])
+
+function leadMemWriteBlocked(args: any): boolean {
+  const type = String(args?.type ?? "").toUpperCase()
+  if (!LEAD_MEM_KNOWLEDGE_TYPES.has(type)) return true
+  const title = String(args?.title ?? "")
+  const content = String(args?.content ?? "")
+  const stateMarker = /"schema"\s*:\s*"continuous-workflow\/v2"|"changeId"\s*:|"expected_version"\s*:|"treeFingerprint"\s*:\s*"|"review"\s*:\s*\{|"verification"\s*:\s*\{/i
+  if (stateMarker.test(content)) return true
+  if (/^workflow\s+\S*\s+v\d/i.test(title)) return true
+  return false
+}
+
 type TaskSnapshot = {
   subagent: string
   kind: "implementation" | "verification" | "review" | "consultation" | "discovery"
@@ -470,8 +495,13 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       const state = states.get(input.sessionID)
         ?? [...states.values()].find((candidate) => activeWorktree(candidate) === cwd)
 
-      if (isLead(agent) && /^engram_mem_/.test(input.tool) && !LEAD_ENGRAM_READONLY.has(input.tool)) {
-        throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: use workflow_state for canonical workflow persistence; only read-only mem_search/mem_context/mem_get_observation are allowed for the Lead")
+      if (isLead(agent) && /^engram_mem_/.test(input.tool)) {
+        const isReadOnly = LEAD_ENGRAM_READONLY.has(input.tool)
+        const isKnowledgeWrite = (input.tool === "mem_save" || input.tool === "mem_update") && !leadMemWriteBlocked(output.args)
+        if (!isReadOnly && !isKnowledgeWrite) {
+          throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: only read-only lookups (mem_search/mem_context/mem_get_observation) and durable knowledge writes (mem_save/mem_update of decisions, architecture, bugs, patterns, learnings) are allowed for the Lead; canonical workflow persistence is exclusively workflow_state")
+        }
+        return
       }
 
       if (input.tool === "workflow_state") {
