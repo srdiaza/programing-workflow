@@ -9,7 +9,7 @@ metadata:
 
 # Continuous Workflow v2
 
-This skill applies only to `workflow-lead`, its generated profiles, and the `workflow-*` subagents launched by that Lead. It is independent of Gentle AI, SDD, OpenSpec, and every other orchestrator. Never invoke or consume their agents, commands, phases, artifacts, or memory.
+This skill applies only to `workflow-lead`, its generated profiles, and the `workflow-*` subagents launched by that Lead. It is self-contained. Never invoke or consume agents, commands, phases, artifacts, or memory belonging to another workflow.
 
 ## Authority
 
@@ -28,7 +28,7 @@ Not every user request asks for code. At `start`, record `workflow_mode: assessm
 ## Evidence tools
 
 - Engram persistence is owned through `workflow_state`. Subagents do not write Engram.
-- Use CodeGraph for structural questions when a valid index already exists. Read-only subagents must never initialize, sync, repair, or mutate `.codegraph`; they fall back to `rg`, repository reads, and Git inspection while disclosing the limitation.
+- Use CodeGraph for structural questions when a valid index already exists. Read-only subagents must never initialize, sync, repair, or mutate `.codegraph`; they fall back to `rg`, repository reads, and Git inspection while disclosing the limitation. Do not use generic resource discovery for workflow state or configured MCP servers; `workflow_state` is a native tool, and an unsupported resource query is not a blocker.
 - Use Context7 when an external library/framework/API claim materially depends on current documentation. If unavailable, mark only that claim unverified; unrelated repository work may continue.
 - Tests, architecture checks, tenant checks, migration checks, linters, and other non-destructive validation run automatically under the recorded verification plan. Focused verification is the default. A complete suite is selected only for an explicit trigger (project rule, migrations/models, shared contract, auth/tenant/accounting core, dependencies/infrastructure, test/CI change, reproduced CI failure, or user request), then runs once after code is frozen by `workflow-implementer` as part of the initial implementation handoff. The Lead records that final evidence directly when it covers the current candidate; it must not delegate a second verification task to the same Implementer. A verification-only task is allowed only for checks explicitly missing from the handoff, and must not repeat completed checks or a complete suite. After any correction following verification or review, run only the checks directly affected by that correction; never rerun the complete suite locally, because CI owns the complete suite for the final candidate. Lead and Reviewer do not repeat it; the Reviewer may run only a concrete focused probe. For `assessment`, the plan is read-only, is owned by `workflow-consultant`, and does not require implementation, delivery preparation, an Implementer receipt, or an independent implementation review. Its receipt is tied to the completed plan and proves read-only execution; it is not invalidated by unrelated changes after the consultant finished. Never clean a worktree to make validation pass: declared untracked test artifacts are preserved and excluded only from the untracked fingerprint; tracked or undeclared changes remain reviewable.
 

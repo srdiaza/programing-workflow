@@ -454,7 +454,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         ?? [...states.values()].find((candidate) => activeWorktree(candidate) === cwd)
 
       if (isLead(agent) && /^engram_mem_/.test(input.tool)) {
-        throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: use workflow_state for canonical workflow persistence; raw engram_mem_* tools are not part of this workflow")
+        throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: use workflow_state for canonical workflow persistence; direct memory tools are not part of this workflow")
       }
 
       if (input.tool === "workflow_state") {
@@ -530,7 +530,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         const current = stateRequired(state)
         const requested = typeof output.args?.subagent_type === "string" ? output.args.subagent_type : ""
         if (externalWorkflowInvocation(requested)) {
-          throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: SDD, Gentle AI, and OpenSpec subagents are forbidden")
+          throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: external workflow agents are not permitted")
         }
         const base = baseAgent(requested)
         const currentWorktree = activeWorktree(current)
@@ -629,7 +629,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       if (input.tool === "bash") {
         const command = String(output.args?.command ?? output.args?.cmd ?? "")
         if ((isLead(agent) || isImplementer(agent)) && externalWorkflowInvocation(command)) {
-          throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: SDD, Gentle AI, and OpenSpec commands are forbidden")
+          throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: external workflow commands are not permitted")
         }
         if (isLead(agent)) {
           if (forbiddenLeadGit(command)) throw new Error("CONTINUOUS WORKFLOW SAFETY GATE: destructive or history-rewriting Git operation is forbidden for workflow-lead")
