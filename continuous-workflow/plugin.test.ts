@@ -163,7 +163,7 @@ describe("Continuous Workflow plugin enforcement", () => {
       verificationInput,
       verification,
     )
-    expect(verification.args.prompt).toContain("Execute only the recorded verification plan")
+    expect(verification.args.prompt).toContain("Execute only the recorded verification checks")
     await expect(plugin["tool.execute.before"](
       { tool: "workflow_state", sessionID: "lead", callID: "assessment-evidence-before" },
       { args: { operation: "verification_record" } },
@@ -290,6 +290,39 @@ describe("Continuous Workflow plugin enforcement", () => {
     )).resolves.toBeUndefined()
   })
 
+  test("correction loops block the real full-suite command and allow affected checks", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    const correction = state(repo.cwd, repo.contractHash)
+    const at = new Date().toISOString()
+    correction.history = [
+      { version: 1, event: "mode:implementation", summary: "implementation", actor: "workflow-lead", sessionID: "lead", at },
+      { version: 2, event: "phase:verification", summary: "initial verification", actor: "workflow-lead", sessionID: "lead", at },
+      { version: 3, event: "phase:implementation", summary: "apply review correction", actor: "workflow-lead", sessionID: "lead", at },
+    ]
+    await cacheState(plugin, "lead", correction)
+    await identify(plugin, "implementer", "workflow-implementer")
+
+    await expect(plugin["tool.execute.before"](
+      { tool: "bash", sessionID: "implementer", callID: "correction-full-suite" },
+      { args: { command: "./.venv/bin/python -m pytest --cov=app --cov-fail-under=50 -q" } },
+    )).rejects.toThrow("CORRECTION GATE")
+    await expect(plugin["tool.execute.before"](
+      { tool: "bash", sessionID: "implementer", callID: "correction-focused" },
+      { args: { command: "./.venv/bin/python -m pytest backend/tests/test_entries.py -q" } },
+    )).resolves.toBeUndefined()
+
+    correction.phase = "verification"
+    await cacheState(plugin, "lead", correction)
+    const verification = { args: { subagent_type: "workflow-implementer", prompt: "run the correction checks" } }
+    await plugin["tool.execute.before"](
+      { tool: "task", sessionID: "lead", callID: "correction-verification" },
+      verification,
+    )
+    expect(verification.args.prompt).toContain("never rerun the complete suite locally")
+  })
+
   test("artifact safety blocks file-moving commands without rejecting a verification task", async () => {
     const repo = repository()
     const plugin = await hooks(repo.cwd)
@@ -328,10 +361,62 @@ describe("Continuous Workflow plugin enforcement", () => {
     await expect(plugin["tool.execute.before"](transition, transitionOutput)).rejects.toThrow("IMPLEMENTATION RECEIPT")
 
     const taskInput = { tool: "task", sessionID: "lead", callID: "implement" }
-    const taskOutput = { args: { subagent_type: "workflow-implementer", prompt: "implement" }, output: "Implemented approved package" }
+    const taskOutput = { args: { subagent_type: "workflow-implementer", prompt: "implement" }, output: "Implemented approved package\nWORKFLOW_IMPLEMENTATION_EVIDENCE: COMPLETE" }
     await plugin["tool.execute.before"](taskInput, taskOutput)
     await plugin["tool.execute.after"](taskInput, taskOutput)
     await expect(plugin["tool.execute.before"](transition, transitionOutput)).resolves.toBeUndefined()
+  })
+
+  test("final implementation evidence prevents a duplicate verification task", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    const implementation = state(repo.cwd, repo.contractHash)
+    await cacheState(plugin, "lead", implementation)
+    const taskInput = { tool: "task", sessionID: "lead", callID: "implement-final-evidence" }
+    const taskOutput = {
+      args: { subagent_type: "workflow-implementer", prompt: "implement" },
+      output: "All required checks completed on the frozen candidate\nWORKFLOW_IMPLEMENTATION_EVIDENCE: COMPLETE",
+    }
+    await plugin["tool.execute.before"](taskInput, taskOutput)
+    await plugin["tool.execute.after"](taskInput, taskOutput)
+
+    await expect(plugin["tool.execute.before"](
+      { tool: "workflow_state", sessionID: "lead", callID: "verify" },
+      { args: { operation: "transition", phase: "verification" } },
+    )).resolves.toBeUndefined()
+
+    const verification = state(repo.cwd, repo.contractHash, "verification")
+    await cacheState(plugin, "lead", verification)
+    await expect(plugin["tool.execute.before"](
+      { tool: "task", sessionID: "lead", callID: "duplicate-verification" },
+      { args: { subagent_type: "workflow-implementer", prompt: "run the full verification again" } },
+    )).rejects.toThrow("final implementation evidence already covers")
+  })
+
+  test("correction-focused implementation evidence is enough for the next verification", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    const correction = state(repo.cwd, repo.contractHash)
+    const at = new Date().toISOString()
+    correction.history = [
+      { version: 1, event: "mode:implementation", summary: "implementation", actor: "workflow-lead", sessionID: "lead", at },
+      { version: 2, event: "phase:verification", summary: "initial verification", actor: "workflow-lead", sessionID: "lead", at },
+      { version: 3, event: "phase:implementation", summary: "apply review correction", actor: "workflow-lead", sessionID: "lead", at },
+    ]
+    await cacheState(plugin, "lead", correction)
+    const taskInput = { tool: "task", sessionID: "lead", callID: "implement-correction" }
+    const taskOutput = {
+      args: { subagent_type: "workflow-implementer", prompt: "apply listed correction" },
+      output: "Affected focused check passed\nWORKFLOW_IMPLEMENTATION_EVIDENCE: CORRECTION_FOCUSED",
+    }
+    await plugin["tool.execute.before"](taskInput, taskOutput)
+    await plugin["tool.execute.after"](taskInput, taskOutput)
+    await expect(plugin["tool.execute.before"](
+      { tool: "workflow_state", sessionID: "lead", callID: "verify-correction" },
+      { args: { operation: "transition", phase: "verification" } },
+    )).resolves.toBeUndefined()
   })
 
   test("verification can delegate a read-only Implementer without reopening implementation", async () => {
@@ -345,7 +430,7 @@ describe("Continuous Workflow plugin enforcement", () => {
       { tool: "task", sessionID: "lead", callID: "verify-only" },
       output,
     )).resolves.toBeUndefined()
-    expect(output.args.prompt).toContain("Execute only the recorded verification plan")
+    expect(output.args.prompt).toContain("Execute only the recorded verification checks")
   })
 
   test("verification-only Implementer cannot mutate the candidate", async () => {
@@ -371,7 +456,7 @@ describe("Continuous Workflow plugin enforcement", () => {
       const implementation = state(repo.cwd, repo.contractHash)
       await cacheState(plugin, "lead", implementation)
       const taskInput = { tool: "task", sessionID: "lead", callID: "implement-durable" }
-      const taskOutput = { args: { subagent_type: "workflow-implementer", prompt: "implement" }, output: "Implemented approved package" }
+      const taskOutput = { args: { subagent_type: "workflow-implementer", prompt: "implement" }, output: "Implemented approved package\nWORKFLOW_IMPLEMENTATION_EVIDENCE: COMPLETE" }
       await plugin["tool.execute.before"](taskInput, taskOutput)
       await plugin["tool.execute.after"](taskInput, taskOutput)
       await plugin["experimental.session.compacting"]({ sessionID: "lead" }, { context: [] })

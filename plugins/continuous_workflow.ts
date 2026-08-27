@@ -69,10 +69,21 @@ function isReviewer(agent: string | undefined): boolean {
 
 function fullSuiteCommand(command: string): boolean {
   const normalized = command.trim()
+  const pytest = normalized.match(/(?:^|[;&|]\s*)(?:(?:\S+\/)?python3?|uv\s+run\s+(?:(?:\S+\/)?python3?))\s+-m\s+pytest\b(.*)$/i)
+  if (pytest) {
+    const args = pytest[1] ?? ""
+    const hasFocusedTarget = /(?:^|\s)(?:[^\s=]*(?:\/|\\))?(?:tests?|specs?|__tests__)(?:\/|\\)|(?:^|\s)[^\s]*\.(?:py|ts|tsx|js|jsx)\b/i.test(args)
+    if (!hasFocusedTarget) return true
+  }
+  const directPytest = normalized.match(/(?:^|[;&|]\s*)(?:(?:\S+\/)?pytest)\b(.*)$/i)
+  if (directPytest) {
+    const args = directPytest[1] ?? ""
+    const hasFocusedTarget = /(?:^|\s)(?:[^\s=]*(?:\/|\\))?(?:tests?|specs?|__tests__)(?:\/|\\)|(?:^|\s)[^\s]*\.(?:py|ts|tsx|js|jsx)\b/i.test(args)
+    if (!hasFocusedTarget) return true
+  }
   return /(?:^|[;&|]\s*)(?:npm|pnpm)\s+run\s+(?:quality-gate|test(?=\s*$)|test:unit(?=\s*$))\b/i.test(normalized)
     || /(?:^|[;&|]\s*)yarn\s+(?:run\s+)?(?:quality-gate|test|test:unit)\b/i.test(normalized)
     || /(?:^|\s)(?:backend\/scripts\/run_quality_gate\.(?:ps1|sh)|\.\/backend\/scripts\/run_quality_gate\.(?:ps1|sh))(?:\s|$)/i.test(normalized)
-    || /(?:^|[;&|]\s*)(?:python3?|uv\s+run\s+python3?)\s+-m\s+pytest(?:\s+(?:-[A-Za-z]|--[\w-]+(?:=[^\s]+)?))*\s*$/i.test(normalized)
     || /(?:^|[;&|]\s*)(?:npx\s+)?(?:vitest|jest)\s+(?:run\s*)?$/i.test(normalized)
 }
 
@@ -81,6 +92,31 @@ function reviewerOutcome(output: string): "passed" | "blocked" | undefined {
   const match = taskResult.match(/(?:^|\n)WORKFLOW_REVIEW_OUTCOME:\s*(PASS|BLOCKED)\s*$/i)
   if (!match) return undefined
   return match[1].toUpperCase() === "PASS" ? "passed" : "blocked"
+}
+
+function implementationEvidenceKind(output: string): "complete" | "correction" | "incomplete" | undefined {
+  const taskResult = output.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/i)?.[1] ?? output
+  const finalLine = taskResult.trim().split(/\r?\n/).at(-1)?.trim()
+  if (/^WORKFLOW_IMPLEMENTATION_EVIDENCE:\s*COMPLETE$/i.test(finalLine ?? "")) return "complete"
+  if (/^WORKFLOW_IMPLEMENTATION_EVIDENCE:\s*CORRECTION_FOCUSED$/i.test(finalLine ?? "")) return "correction"
+  if (/^WORKFLOW_IMPLEMENTATION_EVIDENCE:\s*INCOMPLETE$/i.test(finalLine ?? "")) return "incomplete"
+  return undefined
+}
+
+function isCorrectionLoop(state: WorkflowState): boolean {
+  const implementationStart = state.history.map((entry) => entry.event).lastIndexOf("mode:implementation")
+  let passedVerification = false
+  for (const entry of state.history.slice(implementationStart + 1)) {
+    if (entry.event === "verification_passed" || entry.event === "review_blocked") passedVerification = true
+    if (entry.event === "phase:verification") passedVerification = true
+    if (passedVerification && entry.event === "phase:implementation") return true
+  }
+  return false
+}
+
+function implementationEvidenceSufficient(output: string, state: WorkflowState): boolean {
+  const kind = implementationEvidenceKind(output)
+  return kind === "complete" || (kind === "correction" && isCorrectionLoop(state))
 }
 
 function userText(output: any): string {
@@ -324,6 +360,7 @@ function externalWorkflowInvocation(value: string): boolean {
 }
 
 function packagePrompt(state: WorkflowState, kind: "implementation" | "verification" | "review" | "consultation", fingerprint: string): string {
+  const correctionLoop = isCorrectionLoop(state)
   const packageData = {
     schema: state.schema,
     change_id: state.changeId,
@@ -334,9 +371,13 @@ function packagePrompt(state: WorkflowState, kind: "implementation" | "verificat
     verification_plan: state.verificationPlan,
     candidate_tree_fingerprint: fingerprint,
     authority: kind === "implementation"
-      ? "Implement exactly this approved package. Do not reinterpret, narrow, or modify the contract."
+      ? correctionLoop
+        ? "Apply only the listed correction. Run only the checks directly affected by that correction; do not run the complete suite again because CI will execute it on the final candidate. End the report with the exact line WORKFLOW_IMPLEMENTATION_EVIDENCE: CORRECTION_FOCUSED when those affected checks cover the corrected candidate fingerprint, otherwise end with WORKFLOW_IMPLEMENTATION_EVIDENCE: INCOMPLETE and list only the missing affected checks. This is evidence for the Lead, not a self-approval. Do not reinterpret, narrow, or modify the contract."
+        : "Implement exactly this approved package. Run focused checks as useful while working, then execute the recorded plan once after all code and test edits are frozen. End the report with the exact line WORKFLOW_IMPLEMENTATION_EVIDENCE: COMPLETE only when every required check has been run against this candidate fingerprint; otherwise end with WORKFLOW_IMPLEMENTATION_EVIDENCE: INCOMPLETE and list only the missing checks. This is evidence for the Lead, not a self-approval. Do not reinterpret, narrow, or modify the contract."
       : kind === "verification"
-        ? "Execute only the recorded verification plan. Do not edit source, contracts, or Git state; do not delete, move, restore, or stash files. Declared untracked test artifacts are allowed and must be preserved. Report commands and evidence."
+        ? correctionLoop
+          ? "This is a correction loop after a prior verification. Execute only checks directly affected by the listed correction; never rerun the complete suite locally because CI owns that final run. Do not repeat checks already evidenced for this candidate. Do not edit source, contracts, or Git state; do not delete, move, restore, or stash files. Declared untracked test artifacts are allowed and must be preserved. Report commands and evidence."
+          : "Execute only the recorded verification checks that are still missing from the implementation report. Do not repeat checks already evidenced for this candidate and do not rerun a complete suite unless its final result is genuinely missing or the candidate changed. Do not edit source, contracts, or Git state; do not delete, move, restore, or stash files. Declared untracked test artifacts are allowed and must be preserved. Report commands and evidence."
         : "Inspect against this approved package. Report verified findings and optional suggestions separately.",
   }
   return `\n\n## Continuous Workflow enforced package\n\`\`\`json\n${JSON.stringify(packageData, null, 2)}\n\`\`\`\n`
@@ -410,6 +451,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       const agent = agentFor(input)
       if (!isLead(agent) && !isImplementer(agent) && !isReviewer(agent)) return
       const state = states.get(input.sessionID)
+        ?? [...states.values()].find((candidate) => activeWorktree(candidate) === cwd)
 
       if (isLead(agent) && /^engram_mem_/.test(input.tool)) {
         throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: use workflow_state for canonical workflow persistence; raw engram_mem_* tools are not part of this workflow")
@@ -459,6 +501,9 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
             if (current.phase !== "implementation" || !receipt || receipt.fingerprint !== fingerprint) {
               throw new Error("CONTINUOUS WORKFLOW IMPLEMENTATION RECEIPT: transition to verification requires a completed workflow-implementer task for the current tree; after recovery, delegate one reattachment task for workflow-implementer to inspect and attest the existing candidate (no lifecycle reset or rewrite)")
             }
+            if (!implementationEvidenceSufficient(receipt.output, current)) {
+              throw new Error("CONTINUOUS WORKFLOW IMPLEMENTATION EVIDENCE: the implementation task did not provide final evidence for the recorded plan; delegate only the missing checks, not a second full verification")
+            }
           }
         }
         if (output.args?.operation === "review_record") {
@@ -499,8 +544,15 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           }
           if (current.phase === "verification") {
             if (current.verificationPlan.status !== "planned") throw new Error("CONTINUOUS WORKFLOW VERIFICATION GATE: record the verification plan before delegating verification")
+            const currentReceipt = implementationReceipts.get(input.sessionID) ?? persistedImplementationReceipt(current, currentWorktree, fingerprint)
+            if (current.verification.status === "passed") {
+              throw new Error("CONTINUOUS WORKFLOW VERIFICATION EVIDENCE: verification is already recorded for the current candidate; do not delegate the implementer again")
+            }
+            if (currentReceipt?.fingerprint === fingerprint && implementationEvidenceSufficient(currentReceipt.output, current)) {
+              throw new Error("CONTINUOUS WORKFLOW VERIFICATION EVIDENCE: final implementation evidence already covers the current tree; record verification directly instead of rerunning the implementer")
+            }
             taskKind = "verification"
-            output.args.prompt = `${String(output.args.prompt ?? "")}${packagePrompt(current, "verification", fingerprint)}`
+            output.args.prompt = `${String(output.args.prompt ?? "")}\nRun only the checks from the recorded plan that are still missing from the implementation report. Do not repeat checks already reported for this candidate, and do not rerun the complete suite unless the Lead identifies a concrete missing final result.\n${packagePrompt(current, "verification", fingerprint)}`
           } else {
             const errors = implementationGateErrors(current, currentWorktree)
             if (current.phase !== "implementation") errors.push(`workflow phase must be implementation (current: ${current.phase})`)
@@ -587,6 +639,9 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           }
           if (fullSuiteCommand(command)) throw new Error("CONTINUOUS WORKFLOW VERIFICATION OWNERSHIP: workflow-lead selects and records verification; workflow-implementer runs the complete suite once after code is frozen")
         } else if (isImplementer(agent)) {
+          if (fullSuiteCommand(command) && state && isCorrectionLoop(state)) {
+            throw new Error("CONTINUOUS WORKFLOW CORRECTION GATE: the candidate already passed through verification; run only checks affected by this correction and leave the complete suite to CI")
+          }
           if (/(^|\s)git\s+(push|add|commit|restore|reset|clean|stash|checkout|switch|merge|rebase|cherry-pick|revert|branch\s+-[dDmMcC])(\s|$)/.test(command)) {
             throw new Error("CONTINUOUS WORKFLOW IMPLEMENTER GATE: implementer cannot mutate Git state, history, branches, or remotes")
           }

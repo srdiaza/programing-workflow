@@ -681,6 +681,9 @@ export default tool({
           state = event(state, `phase:${args.phase}`, summary || `Transitioned to ${args.phase}`, context.agent, context.sessionID)
           state.phase = args.phase
           if (nextAction) state.nextAction = nextAction
+          else if (args.phase === "verification" && state.mode === "implementation") {
+            state.nextAction = "Inspect the implementation report and record verification evidence directly; after a correction run only affected checks and leave the complete suite to CI; delegate only explicitly missing checks, then launch the independent reviewer"
+          }
         } else if (operation === "checkpoint") {
           state = event(state, "checkpoint", summary || "Checkpoint", context.agent, context.sessionID)
           if (nextAction) state.nextAction = nextAction
