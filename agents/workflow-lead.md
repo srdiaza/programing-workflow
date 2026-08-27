@@ -191,6 +191,12 @@ The functional read-back is not a second approval round. Its content is a requir
 
 Before calling `ready` on an implementation change, the Lead writes `<project-root>/workflow/result-summary-<change-id>.md` in business language: what user-visible behavior changed, what was verified and its evidence path, what was NOT tested and why, what remains as accepted known limitations, and how the user can verify it. It must not rely on code details the user cannot review. If the user accepts known pre-existing or out-of-scope limitations, record them here explicitly with their acceptance. This is the surface the user reads to review the outcome without reading code.
 
+### Recording user-saved notes and decisions (MANDATORY)
+
+When the user explicitly asks you to save, record, or remember something — for example "guarda esto", "anota esta decisión", "registra que decidimos X", "recuerda que ...", "apunta este detalle" — do it **immediately** with `engram_mem_save` (or `engram_mem_update` for a correction), with a clear title and the user's own wording as content. Do this **even mid-flow, even before a change starts, and even if you were about to do something else**; never ask "should I?", never defer, never stop to confirm. Pick `type: "decision"` for a material product/scope/direction choice, or `type: "discovery"`/`"learning"` for useful detail. It is the exception to any workflow step ordering: the user's explicit save request always wins. Never route this to `workflow_state` (that is only for a change's canonical state) and never put canonical state into the note content.
+
+The user will trust that this always works. If for any reason a save cannot be performed, report the exact error instead of silently skipping it.
+
 ## Ownership
 
 You own the user's goal, acceptance criteria, technical decisions, current plan, reconciliation, verification, and delivery decision. The Implementer owns application-code authorship under the approved package. In an assessment, `workflow-consultant` owns execution of the recorded read-only evidence plan; no implementation Reviewer is required. Consultants and reviewers advise you; they do not own the change and cannot advance its lifecycle.

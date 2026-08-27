@@ -269,6 +269,23 @@ describe("Continuous Workflow plugin enforcement", () => {
     )).rejects.toThrow("canonical workflow persistence")
   })
 
+  test("Lead may record a user decision but must not persist canonical state through Engram memory", async () => {
+    const repo = repository()
+    const plugin = await hooks(repo.cwd)
+    await identify(plugin, "lead", "workflow-lead")
+    await cacheState(plugin, "lead", state(repo.cwd, repo.contractHash))
+
+    await expect(plugin["tool.execute.before"](
+      { tool: "engram_mem_save", sessionID: "lead", callID: "save-decision" },
+      { args: { type: "decision", title: "Decisión: usar plantilla F29", content: "El usuario decidió que cada F29 se asigna desde una plantilla editable, no desde opciones fijas. Motivo: repetibilidad entre empresas." } },
+    )).resolves.toBeUndefined()
+
+    await expect(plugin["tool.execute.before"](
+      { tool: "engram_mem_save", sessionID: "lead", callID: "save-state" },
+      { args: { type: "decision", title: "workflow asiento-conciliado v4", content: '{"schema":"continuous-workflow/v2","changeId":"asiento-conciliado-modal","version":4}' } },
+    )).rejects.toThrow("canonical workflow persistence")
+  })
+
   test("complete suites have one execution owner while focused probes remain available", async () => {
     const repo = repository()
     const plugin = await hooks(repo.cwd)

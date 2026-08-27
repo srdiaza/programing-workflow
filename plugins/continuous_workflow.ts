@@ -29,10 +29,10 @@ const READ_ONLY_SUBAGENTS = new Set([
 // prior work. These are read-only; every write (mem_save/update/delete/etc.)
 // remains blocked so `workflow_state` stays the only canonical persistence.
 const LEAD_ENGRAM_READONLY = new Set([
-  "mem_search",
-  "mem_context",
-  "mem_get_observation",
-  "mem_current_project",
+  "engram_mem_search",
+  "engram_mem_context",
+  "engram_mem_get_observation",
+  "engram_mem_current_project",
 ])
 
 // Durable, non-state knowledge the Lead may write so future discovery reads are
@@ -497,7 +497,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
 
       if (isLead(agent) && /^engram_mem_/.test(input.tool)) {
         const isReadOnly = LEAD_ENGRAM_READONLY.has(input.tool)
-        const isKnowledgeWrite = (input.tool === "mem_save" || input.tool === "mem_update") && !leadMemWriteBlocked(output.args)
+        const isKnowledgeWrite = (input.tool === "engram_mem_save" || input.tool === "engram_mem_update") && !leadMemWriteBlocked(output?.args)
         if (!isReadOnly && !isKnowledgeWrite) {
           throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: only read-only lookups (mem_search/mem_context/mem_get_observation) and durable knowledge writes (mem_save/mem_update of decisions, architecture, bugs, patterns, learnings) are allowed for the Lead; canonical workflow persistence is exclusively workflow_state")
         }
