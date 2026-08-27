@@ -128,14 +128,14 @@ For a larger request, include the desired result, important constraints, and how
 For the first request in a project, the Lead first classifies the request as `assessment` or `implementation`:
 
 1. **Discovery** — reads the project rules and current behavior and delegates read-only fact-finding when useful.
-2. **Functional contract** — writes `workflow/contracts/<change-id>.md` in business language, presents the complete version, and waits for explicit user approval of its exact hash.
+2. **Functional contract** — writes `workflow/contracts/<change-id>.md` in business language, enumerating the user's actions and observable results (this is the single read-back; no separate approval round), presents the complete version, and waits for explicit user approval of its exact hash.
 3. **Capabilities and consultation** — separates every current behavior, future direction, and non-goal into observable capabilities, then reconciles relevant read-only specialist evidence.
 
 For an **assessment**, the Lead records a focused read-only verification plan owned by `workflow-consultant`, transitions directly to verification, and obtains an independent Reviewer review. It does not prepare an implementation branch, present an implementation brief, delegate `workflow-implementer`, or modify application code. The result is a recommendation and its evidence. If the user later asks to apply it, the same change can enter implementation mode through an explicit `mode_set` operation without restarting discovery.
 
 For an **implementation**, the Lead prepares a non-protected branch/worktree, presents the implementation brief, records the verification plan, and delegates the approved package to `workflow-implementer`, which is the sole owner of application-code authorship and any complete suite. The Lead cannot edit application code and must inspect the resulting diff. Verification and independent review then operate on the current tree fingerprint.
 
-Every concrete finding blocks delivery, regardless of severity or whether it was pre-existing. Implementation corrections move directly from verification to the Implementer and back to verification; the approved contract, capability matrix, brief, delivery setup, and earlier evidence remain in force. Only checks affected by the correction are replanned, unless its risk requires the complete suite. `ready` waits for explicit user confirmation; `complete` is allowed only afterward.
+Every concrete finding blocks delivery, regardless of severity or whether it was pre-existing. Implementation corrections move directly from verification to the Implementer and back to verification; the approved contract, capability matrix, brief, delivery setup, and earlier evidence remain in force. Only checks affected by the correction are replanned, unless its risk requires the complete suite. Before request `ready`, the Lead writes `workflow/result-summary-<change-id>.md` in business language (what changed, what was verified and how, what was not tested, accepted known limitations) as the surface you review without reading code. `ready` waits for explicit user confirmation; `complete` is allowed only afterward.
 
 The state and checkpoints are kept in Engram, so a restart or compaction does not make the Lead start from memory alone.
 
@@ -231,7 +231,7 @@ workflow-ai sync
 
 ## Project setup and recovery
 
-There is no mandatory project-specific initialization command. On the first request, the Lead reads the project's own `AGENTS.md`, rules, architecture, tests, and current Git state. Read-only subagents use an existing CodeGraph index when available and fall back to repository evidence without mutating `.codegraph`. Project-specific files stay in the project; workflow state stays in Engram.
+There is no mandatory project-specific initialization command. On the first request, the Lead reads the project's own `AGENTS.md`, rules, architecture, tests, and current Git state. Read-only subagents always pass the repository root as `projectPath` to every CodeGraph query (CodeGraph has no default project). If no `.codegraph/` exists yet, run `codegraph init <project-root>` once; until then they fall back to `rg`/repository evidence without mutating `.codegraph`. The Lead may run read-only `mem_search` in Discovery to seed context from prior work. Project-specific files stay in the project; workflow state stays in Engram.
 
 After a restart, use:
 

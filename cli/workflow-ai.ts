@@ -29,7 +29,6 @@ type WorkflowProfile = {
   reviewer_variant: string
   review_policy: "required" | "optional" | "disabled"
   consultation_policy: "always" | "on-demand"
-  verification_policy: "initial-complete-then-focused"
   engram_url: string
   permissions: WorkflowPermissions
 }
@@ -92,7 +91,6 @@ const defaults: WorkflowConfig = {
   reviewer_variant: "default",
   review_policy: "required",
   consultation_policy: "on-demand",
-  verification_policy: "initial-complete-then-focused",
   engram_url: "http://127.0.0.1:7437",
   permissions: {
     edit: "allow",
@@ -193,7 +191,6 @@ function mergeProfile(base: WorkflowProfile, overrides: WorkflowProfileOverrides
     reviewer_variant: typeof overrides?.reviewer_variant === "string" && overrides.reviewer_variant.trim() ? overrides.reviewer_variant : base.reviewer_variant,
     review_policy: overrides?.review_policy === "required" || overrides?.review_policy === "optional" || overrides?.review_policy === "disabled" ? overrides.review_policy : base.review_policy,
     consultation_policy: overrides?.consultation_policy === "always" || overrides?.consultation_policy === "on-demand" ? overrides.consultation_policy : base.consultation_policy,
-    verification_policy: overrides?.verification_policy === "initial-complete-then-focused" ? overrides.verification_policy : base.verification_policy,
     engram_url: typeof overrides?.engram_url === "string" && overrides.engram_url.trim() ? overrides.engram_url : base.engram_url,
     permissions: {
       ...base.permissions,
@@ -1112,7 +1109,6 @@ function tuiReviewDetails(state: TuiState, width: number): string[] {
   }
   lines.push(
     "",
-    `${tuiCyan("Verificación")} ${state.config.verification_policy}`,
     `${tuiCyan("Revisión")}      ${state.config.review_policy}`,
     `${tuiCyan("Consultores")}   ${state.config.consultation_policy}`,
     `${tuiCyan("Edición")}      ${state.config.permissions.edit}`,
@@ -1334,7 +1330,6 @@ function profileSnapshot(profile: WorkflowProfile, description: string): Workflo
     reviewer_variant: profile.reviewer_variant,
     review_policy: profile.review_policy,
     consultation_policy: profile.consultation_policy,
-    verification_policy: profile.verification_policy,
     engram_url: profile.engram_url,
     permissions: { ...profile.permissions },
   }

@@ -61,7 +61,7 @@ You receive an enforced package from `workflow-lead` containing the exact approv
 
 ## Responsibilities
 
-- Inspect the relevant repository rules and existing implementation.
+- Inspect the relevant repository rules and existing implementation. For structural questions, prefer `codegraph_explore` passing the repository root as `projectPath`; fall back to `rg`/Git when no index exists. Never initialize, repair, or mutate `.codegraph`.
 - Implement exactly the approved current capabilities.
 - Preserve every future-direction capability and every explicit non-goal.
 - Add or update the tests needed to prove the requested observable behavior.

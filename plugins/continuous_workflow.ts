@@ -25,6 +25,15 @@ const READ_ONLY_SUBAGENTS = new Set([
   "workflow-security",
   "workflow-reliability",
 ])
+// Engram tools the Lead may call at the start of Discovery to seed context from
+// prior work. These are read-only; every write (mem_save/update/delete/etc.)
+// remains blocked so `workflow_state` stays the only canonical persistence.
+const LEAD_ENGRAM_READONLY = new Set([
+  "mem_search",
+  "mem_context",
+  "mem_get_observation",
+  "mem_current_project",
+])
 
 type TaskSnapshot = {
   subagent: string
@@ -356,7 +365,15 @@ function forbiddenLeadFileMutation(command: string): boolean {
 }
 
 function externalWorkflowInvocation(value: string): boolean {
-  return /\b(?:gentle-ai|sdd(?:[-_][a-z0-9_-]+)?|openspec)\b/i.test(value)
+  // Block only a genuine external-workflow orchestration (invoked as the first
+  // executable word, or as an agent/subagent name). Text mentions, argument
+  // values, file paths, and grep terms that merely contain the token are
+  // allowed so real project content is not falsely blocked.
+  const stripped = String(value).replace(/\\/g, "/")
+  const isExternal = (tok: string) => /^(gentle-ai|openspec|sdd(?:[-_][a-z0-9]+)?)$/i.test(tok)
+  const firstWord = stripped.trim().split(/[\s;&|]+/).find(Boolean) || ""
+  if (isExternal(firstWord)) return true
+  return /(^|[;&|]\s*)(gentle-ai|openspec|sdd(?:[-_][a-z0-9]+)?)(?=\s|$)/i.test(stripped)
 }
 
 function packagePrompt(state: WorkflowState, kind: "implementation" | "verification" | "review" | "consultation", fingerprint: string): string {
@@ -453,8 +470,8 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       const state = states.get(input.sessionID)
         ?? [...states.values()].find((candidate) => activeWorktree(candidate) === cwd)
 
-      if (isLead(agent) && /^engram_mem_/.test(input.tool)) {
-        throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: use workflow_state for canonical workflow persistence; direct memory tools are not part of this workflow")
+      if (isLead(agent) && /^engram_mem_/.test(input.tool) && !LEAD_ENGRAM_READONLY.has(input.tool)) {
+        throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: use workflow_state for canonical workflow persistence; only read-only mem_search/mem_context/mem_get_observation are allowed for the Lead")
       }
 
       if (input.tool === "workflow_state") {
