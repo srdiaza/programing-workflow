@@ -346,6 +346,24 @@ function event(state: WorkflowState, name: string, summary: string, agent: strin
   return { ...state, version, updatedAt: timestamp, owner, profile: profileFromAgent(agent), history }
 }
 
+function isCorrectionLoop(state: WorkflowState): boolean {
+  const implementationStart = state.history.map((entry) => entry.event).lastIndexOf("mode:implementation")
+  let passedVerification = false
+  for (const entry of state.history.slice(implementationStart + 1)) {
+    if (entry.event === "verification_passed" || entry.event === "review_blocked" || entry.event === "phase:verification") passedVerification = true
+    if (passedVerification && entry.event === "phase:implementation") return true
+  }
+  return false
+}
+
+function statusView(state: WorkflowState): WorkflowState {
+  if (state.mode !== "implementation" || state.phase !== "verification" || !isCorrectionLoop(state)) return state
+  return {
+    ...state,
+    nextAction: "Record verification with only the checks affected by the correction; leave the complete suite to CI, then launch the independent reviewer",
+  }
+}
+
 function result(state: WorkflowState, message: string): { title: string; output: string; metadata: Record<string, unknown> } {
   return {
     title: `workflow ${state.changeId} v${state.version}`,
@@ -427,11 +445,11 @@ export default tool({
         const current = await loadState(project, changeId)
         if (!current) return { title: `workflow ${changeId}`, output: JSON.stringify({ status: "not_found", project, changeId }, null, 2), metadata: { status: "not_found", changeId, project } }
         mirrorState(current.state)
-        return result(current.state, current.migrated ? "Current workflow state (legacy v1 loaded as v2; next mutation will persist the migration)" : "Current workflow state")
+        return result(statusView(current.state), current.migrated ? "Current workflow state (legacy v1 loaded as v2; next mutation will persist the migration)" : "Current workflow state")
       } catch (error) {
         const local = mirroredState(project, changeId)
         if (!local) throw error
-        return result(local, "Current workflow state (local durable mirror; Engram was unavailable)")
+        return result(statusView(local), "Current workflow state (local durable mirror; Engram was unavailable)")
       }
     }
 
