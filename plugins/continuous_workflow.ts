@@ -124,19 +124,18 @@ function fullSuiteCommand(command: string): boolean {
 
 function reviewerOutcome(output: string): "passed" | "blocked" | undefined {
   const taskResult = output.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/i)?.[1] ?? output
-  const match = taskResult.match(/(?:^|\n)WORKFLOW_REVIEW_OUTCOME:\s*(PASS|BLOCKED)\s*$/i)
+  const match = taskResult.match(/\bWORKFLOW_REVIEW_OUTCOME:\s*(PASS|BLOCKED)\b/i)
   if (!match) return undefined
   return match[1].toUpperCase() === "PASS" ? "passed" : "blocked"
 }
 
 function implementationEvidenceKind(output: string): "complete" | "correction" | "incomplete" | undefined {
   const taskResult = output.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/i)?.[1] ?? output
-  // Accept the marker anywhere in the trailing lines so a short trailing note,
-  // newline, or minor truncation of the subagent output does not lose it.
-  const tail = (taskResult.trim().split(/\r?\n/).slice(-8).filter(Boolean).join("\n") || taskResult).trim()
-  if (/\bWORKFLOW_IMPLEMENTATION_EVIDENCE:\s*COMPLETE\b/i.test(tail)) return "complete"
-  if (/\bWORKFLOW_IMPLEMENTATION_EVIDENCE:\s*CORRECTION_FOCUSED\b/i.test(tail)) return "correction"
-  if (/\bWORKFLOW_IMPLEMENTATION_EVIDENCE:\s*INCOMPLETE\b/i.test(tail)) return "incomplete"
+  // Scan the whole captured output so a short or truncated subagent result does
+  // not lose the marker. The implementer is instructed to lead with the marker.
+  if (/\bWORKFLOW_IMPLEMENTATION_EVIDENCE:\s*COMPLETE\b/i.test(taskResult)) return "complete"
+  if (/\bWORKFLOW_IMPLEMENTATION_EVIDENCE:\s*CORRECTION_FOCUSED\b/i.test(taskResult)) return "correction"
+  if (/\bWORKFLOW_IMPLEMENTATION_EVIDENCE:\s*INCOMPLETE\b/i.test(taskResult)) return "incomplete"
   return undefined
 }
 
@@ -418,12 +417,12 @@ function packagePrompt(state: WorkflowState, kind: "implementation" | "verificat
     authority: kind === "implementation"
       ? correctionLoop
         ? "Apply only the listed correction. Run only the checks directly affected by that correction; do not run the complete suite again because CI will execute it on the final candidate. End the report with the exact line WORKFLOW_IMPLEMENTATION_EVIDENCE: CORRECTION_FOCUSED when those affected checks cover the corrected candidate fingerprint, otherwise end with WORKFLOW_IMPLEMENTATION_EVIDENCE: INCOMPLETE and list only the missing affected checks. This is evidence for the Lead, not a self-approval. Do not reinterpret, narrow, or modify the contract."
-        : "Implement exactly this approved package. Run focused checks as useful while working, then execute the recorded `requiredChecks` once after all code and test edits are frozen. The recorded `manualChecks` are human/functional proof you are not expected to execute (for example a manual UI export, a >10,000-row run, or a hand-confirmed scenario): report them as awaiting manual verification rather than treating them as failed checks. End the report with the exact line WORKFLOW_IMPLEMENTATION_EVIDENCE: COMPLETE only when every executable required check has been run against this candidate fingerprint; otherwise end with WORKFLOW_IMPLEMENTATION_EVIDENCE: INCOMPLETE and list only the missing executable checks. This is evidence for the Lead, not a self-approval. Do not reinterpret, narrow, or modify the contract."
+        : "Implement exactly this approved package. Run focused checks as useful while working, then execute the recorded `requiredChecks` once after all code and test edits are frozen. The recorded `manualChecks` are human/functional proof you are not expected to execute (for example a manual UI export, a >10,000-row run, or a hand-confirmed scenario): report them as awaiting manual verification rather than treating them as failed checks. Begin your final report with the exact line WORKFLOW_IMPLEMENTATION_EVIDENCE: COMPLETE as the first line only when every executable required check has been run against this candidate fingerprint; otherwise open with WORKFLOW_IMPLEMENTATION_EVIDENCE: INCOMPLETE and list only the missing executable checks, then give the details. This is evidence for the Lead, not a self-approval. Do not reinterpret, narrow, or modify the contract."
       : kind === "verification"
         ? correctionLoop
           ? "This is a correction loop after a prior verification. Execute only checks directly affected by the listed correction; never rerun the complete suite locally because CI owns that final run. Do not repeat checks already evidenced for this candidate. Do not edit source, contracts, or Git state; do not delete, move, restore, or stash files. Declared untracked test artifacts are allowed and must be preserved. Report commands and evidence."
           : "Execute only the recorded verification checks that are still missing from the implementation report. Do not repeat checks already evidenced for this candidate and do not rerun a complete suite unless its final result is genuinely missing or the candidate changed. Do not edit source, contracts, or Git state; do not delete, move, restore, or stash files. Declared untracked test artifacts are allowed and must be preserved. Report commands and evidence."
-        : "Inspect against this approved package. Report verified findings and optional suggestions separately.",
+        : "Inspect against this approved package. Begin your review with the exact first line WORKFLOW_REVIEW_OUTCOME: PASS (no correction required) or WORKFLOW_REVIEW_OUTCOME: BLOCKED (one or more concrete findings remain), then report verified findings and optional suggestions separately.",
   }
   return `\n\n## Continuous Workflow enforced package\n\`\`\`json\n${JSON.stringify(packageData, null, 2)}\n\`\`\`\n`
 }
