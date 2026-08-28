@@ -28,7 +28,9 @@ function repository(withContract = false): string {
 }
 
 function context(cwd: string): any {
-  return { agent: "workflow-lead", sessionID: "state-tool-session", directory: cwd, worktree: cwd }
+  // Unique session id so persistent Engram sessions from earlier runs never
+  // collide with the project of a fresh temp repository.
+  return { agent: "workflow-lead", sessionID: `state-tool-session-${Math.random().toString(36).slice(2)}`, directory: cwd, worktree: cwd }
 }
 
 afterEach(() => {
@@ -51,9 +53,22 @@ describe("workflow_state durable recovery", () => {
     } as any, context(cwd))
     expect(started.output).toContain("Started workflow durable-recovery")
 
-    const status = await WorkflowState.execute({ operation: "status", change_id: "durable-recovery" } as any, context(cwd))
-    expect(status.output).toContain("local durable file")
-    expect(status.output).toContain('"changeId": "durable-recovery"')
+    const prevUrl = process.env.ENGRAM_URL
+    const prevBin = process.env.ENGRAM_BIN
+    try {
+      // Force Engram to appear unreachable so `status` exercises the durable
+      // mirror fallback regardless of whether a real Engram is running locally.
+      process.env.ENGRAM_URL = "http://127.0.0.1:1"
+      process.env.ENGRAM_BIN = "/nonexistent-engram"
+      const status = await WorkflowState.execute({ operation: "status", change_id: "durable-recovery" } as any, context(cwd))
+      expect(status.output).toContain("local durable mirror")
+      expect(status.output).toContain('"changeId": "durable-recovery"')
+    } finally {
+      if (prevUrl === undefined) delete process.env.ENGRAM_URL
+      else process.env.ENGRAM_URL = prevUrl
+      if (prevBin === undefined) delete process.env.ENGRAM_BIN
+      else process.env.ENGRAM_BIN = prevBin
+    }
   })
 
   test("start refuses to replace an existing contract when state is missing", async () => {
