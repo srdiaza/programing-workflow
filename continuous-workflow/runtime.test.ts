@@ -169,7 +169,6 @@ describe("Continuous Workflow v2 gates", () => {
     writeFileSync(`${cwd}/tracked.txt`, "changed after review\n")
     expect(readyGateErrors(candidate, cwd)).toContain("verification is missing or stale for the current tree")
     expect(readyGateErrors(candidate, cwd)).toContain("independent review is missing or stale for the current tree")
-    expect(readyGateErrors(candidate, cwd)).toContain("CI has not passed for the current tree")
   })
 
   test("a concrete finding always blocks ready", () => {
@@ -192,7 +191,7 @@ describe("Continuous Workflow v2 gates", () => {
     expect(errors).toContain("1 review finding(s) remain unresolved")
   })
 
-  test("CI green and passing tests never make a change ready without CI passed and the user's manual review", () => {
+  test("green tests and a passing build never make a change ready without the reviewer verdict and the user's manual review", () => {
     const cwd = repository()
     const fingerprint = treeFingerprint(cwd)
     const base = state(cwd)
@@ -200,12 +199,9 @@ describe("Continuous Workflow v2 gates", () => {
     base.phase = "review"
     base.verification = { status: "passed", treeFingerprint: fingerprint, evidence: ["tests pass", "typecheck", "lint"] }
     base.review = { status: "passed", treeFingerprint: fingerprint, findings: [], summary: "PASS" }
-    base.ci = { status: "pending", treeFingerprint: fingerprint }
     base.manualReview = { status: "pending" }
     const errors = readyGateErrors(base, cwd)
-    expect(errors).toContain("CI has not passed for the current tree")
     expect(errors).toContain("the change is not ready until the user confirms manual review of the result summary")
-    base.ci = { status: "passed", treeFingerprint: fingerprint }
     base.manualReview = { status: "approved" }
     expect(readyGateErrors(base, cwd)).toEqual([])
   })

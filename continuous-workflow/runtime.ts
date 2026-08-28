@@ -309,8 +309,10 @@ export function assessmentGateErrors(state: WorkflowState, worktree: string): st
 
 export function readyGateErrors(state: WorkflowState, worktree: string): string[] {
   const errors = state.mode === "assessment" ? assessmentGateErrors(state, worktree) : []
-  if (state.phase !== "verification" && state.phase !== "review" && state.phase !== "delivery") {
-    errors.push(`workflow phase must be verification, review, or delivery (current: ${state.phase})`)
+  if (state.mode === "assessment") {
+    if (state.phase !== "verification" && state.phase !== "delivery") errors.push(`assessment must be in verification or delivery (current: ${state.phase})`)
+  } else {
+    if (state.phase !== "review" && state.phase !== "delivery") errors.push(`implementation must enter the post-CI review window (phase review) before ready (current: ${state.phase})`)
   }
   if (state.mode !== "assessment") {
     const impl = implementationGateErrors(state, worktree).filter((e) => !e.startsWith("workflow status must be active"))
@@ -319,7 +321,6 @@ export function readyGateErrors(state: WorkflowState, worktree: string): string[
     if (state.verification.status !== "passed" || state.verification.treeFingerprint !== fingerprint) errors.push("verification is missing or stale for the current tree")
     if (state.review.status !== "passed" || state.review.treeFingerprint !== fingerprint) errors.push("independent review is missing or stale for the current tree")
     if (state.review.findings.length > 0) errors.push(`${state.review.findings.length} review finding(s) remain unresolved`)
-    if (state.ci.status !== "passed" || state.ci.treeFingerprint !== fingerprint) errors.push("CI has not passed for the current tree")
     if (state.manualReview.status !== "approved") errors.push("the change is not ready until the user confirms manual review of the result summary")
   }
   if (state.capabilities.length === 0) errors.push("capability matrix is empty")
