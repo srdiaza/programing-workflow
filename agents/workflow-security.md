@@ -1,6 +1,9 @@
 ---
 description: Read-only security and privacy specialist for the selectable workflow
 mode: subagent
+tools:
+  codegraph_*: true
+  context7_*: true
 model: minimax/MiniMax-M3
 variant: thinking
 permission:

@@ -1,6 +1,9 @@
 ---
 description: Read-only selectable consultant for project exploration and options
 mode: subagent
+tools:
+  codegraph_*: true
+  context7_*: true
 model: minimax/MiniMax-M3
 variant: thinking
 permission:

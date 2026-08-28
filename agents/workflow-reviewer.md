@@ -1,6 +1,9 @@
 ---
 description: Read-only selectable reviewer for acceptance, regression, and risk checks
 mode: subagent
+tools:
+  codegraph_*: true
+  context7_*: true
 model: minimax/MiniMax-M3
 variant: thinking
 permission:

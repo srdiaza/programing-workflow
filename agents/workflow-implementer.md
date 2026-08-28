@@ -1,7 +1,10 @@
 ---
 description: Constrained implementation writer for an approved Continuous Workflow package
 mode: subagent
-model: deepseek/deepseek-v4-flash-vision-exp
+tools:
+  codegraph_*: true
+  context7_*: true
+model: openai/gpt-5.6-luna
 variant: high
 permission:
   question: deny
