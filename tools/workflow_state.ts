@@ -328,7 +328,8 @@ function transitionAllowed(from: Phase, to: Phase): boolean {
     discovery: ["planning"],
     planning: ["implementation", "discovery"],
     implementation: ["verification", "planning"],
-    verification: ["delivery", "implementation", "planning"],
+    verification: ["review", "delivery", "implementation", "planning"],
+    review: ["implementation", "verification", "delivery", "planning"],
     delivery: ["verification", "planning"],
   }
   return allowed[from].includes(to)
@@ -404,7 +405,7 @@ const findingSchema = tool.schema.object({
 export default tool({
   description: "Manage Continuous Workflow v2 assessment and implementation tracks. Contract, evidence, delivery, verification, review, recovery, and completion gates are typed and enforced; only workflow-lead may mutate canonical state.",
   args: {
-    operation: tool.schema.enum(["start", "status", "claim", "recover", "mode_set", "delivery_prepare", "contract_draft", "contract_approve", "contract_metadata_reconcile", "capabilities_record", "capabilities_evidence", "brief_present", "verification_plan", "transition", "checkpoint", "consultation", "verification_record", "review_record", "ready", "complete", "reopen", "abort"]),
+    operation: tool.schema.enum(["start", "status", "claim", "recover", "mode_set", "delivery_prepare", "contract_draft", "contract_approve", "contract_metadata_reconcile", "capabilities_record", "capabilities_evidence", "brief_present", "verification_plan", "transition", "checkpoint", "consultation", "verification_record", "review_record", "post_ci", "ci_status", "manual_confirm", "ready", "complete", "reopen", "abort"]),
     change_id: tool.schema.string().describe("Stable change identifier"),
     goal: tool.schema.string().optional(),
     acceptance_criteria: tool.schema.array(tool.schema.string()).optional(),
@@ -427,9 +428,10 @@ export default tool({
     verification_artifact_paths: tool.schema.array(tool.schema.string()).optional(),
     verification_evidence: tool.schema.array(tool.schema.string()).optional(),
     review_outcome: tool.schema.enum(["passed", "blocked"]).optional(),
+    ci_outcome: tool.schema.enum(["passed", "failed"]).optional(),
     findings: tool.schema.array(findingSchema).optional(),
     consultation_kind: tool.schema.enum(["consultation", "review"]).optional(),
-    confirmation: tool.schema.enum(["explicit_user_contract_approval", "explicit_user_confirmation"]).optional(),
+    confirmation: tool.schema.enum(["explicit_user_contract_approval", "explicit_user_confirmation", "explicit_user_manual_review"]).optional(),
   },
   async execute(args, context) {
     const changeId = safeChangeId(args.change_id)
@@ -494,6 +496,8 @@ export default tool({
           verificationPlan: { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] },
           verification: { status: "missing", treeFingerprint: "", evidence: [] },
           review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
+          ci: { status: "pending", treeFingerprint: "" },
+          manualReview: { status: "pending" },
         }
         const saved = await persistState(project, context.sessionID, state)
         return result(state, `Started workflow ${changeId} (observation ${saved.id ?? "unknown"})`)
@@ -720,7 +724,7 @@ export default tool({
             : "Launch independent review against the verified tree")
         } else if (operation === "review_record") {
           if (state.mode === "assessment") throw new Error("assessment does not require an independent review; present the consultant recommendation instead")
-          if (state.phase !== "verification") throw new Error("review can only be recorded in verification phase")
+          if (state.phase !== "verification" && state.phase !== "review") throw new Error("review can only be recorded in verification or the post-CI review phase")
           if (state.verification.status !== "passed" || state.verification.treeFingerprint !== treeFingerprint(worktree, state.verificationPlan.artifactPaths)) throw new Error("review requires current verification evidence")
           if (!args.review_outcome) throw new Error("review_outcome is required")
           const findings = (args.findings ?? []) as Finding[]
@@ -730,8 +734,34 @@ export default tool({
           state = event(state, args.review_outcome === "passed" ? "review_passed" : "review_blocked", summary || `Review ${args.review_outcome}`, context.agent, context.sessionID)
           state.review = { status: args.review_outcome, treeFingerprint: fingerprint, findings, summary: summary || "", recordedAt: state.updatedAt }
           state.nextAction = nextAction || (args.review_outcome === "passed" ? "Request ready after confirming capability evidence" : "Return all findings to workflow-implementer, then reverify and rereview")
+        } else if (operation === "post_ci") {
+          if (state.mode === "assessment") throw new Error("assessment does not enter the post-CI window")
+          if (state.phase !== "verification") throw new Error("the post-CI window requires the verification phase")
+          if (state.delivery.status !== "prepared") throw new Error("prepare the delivery branch/worktree before the post-CI window")
+          if (state.verification.status !== "passed") throw new Error("verification must pass before the post-CI window")
+          const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
+          state = event(state, "post_ci", summary || "Entered the post-CI review window", context.agent, context.sessionID)
+          state.status = "post-ci"
+          state.phase = "review"
+          state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
+          state.ci = { status: "pending", treeFingerprint: fingerprint }
+          state.manualReview = { status: "pending" }
+          state.nextAction = nextAction || "Record the CI result, then run the independent reviewer on the committed tree"
+        } else if (operation === "ci_status") {
+          if (state.status !== "post-ci") throw new Error("the CI result can only be recorded in the post-CI window")
+          if (!args.ci_outcome) throw new Error("ci_outcome is required (passed | failed)")
+          const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
+          state = event(state, args.ci_outcome === "passed" ? "ci_passed" : "ci_failed", summary || `CI ${args.ci_outcome}`, context.agent, context.sessionID)
+          state.ci = { status: args.ci_outcome, treeFingerprint: fingerprint }
+          state.nextAction = nextAction || (args.ci_outcome === "passed" ? "Run the independent reviewer on the committed tree" : "Return CI failures to workflow-implementer, then rereview")
+        } else if (operation === "manual_confirm") {
+          if (state.status !== "post-ci") throw new Error("manual review confirmation applies only in the post-CI window")
+          if (args.confirmation !== "explicit_user_manual_review") throw new Error("explicit user manual review confirmation is required")
+          state = event(state, "manual_reviewed", summary || "User confirmed the result summary", context.agent, context.sessionID)
+          state.manualReview = { status: "approved", confirmedAt: state.updatedAt, approvalSessionID: context.sessionID }
+          state.nextAction = nextAction || "Request ready: CI passed, review passed, and the user confirmed manual review"
         } else if (operation === "ready") {
-          if (state.status !== "active") throw new Error(`workflow must be active before ready (current: ${state.status})`)
+          if (state.status !== "active" && state.status !== "post-ci") throw new Error(`workflow must be active or post-ci before ready (current: ${state.status})`)
           const errors = readyGateErrors(state, worktree)
           if (errors.length) throw new Error(`ready gate failed: ${errors.join("; ")}`)
           state = event(state, "ready_for_confirmation", summary || (state.mode === "assessment"
@@ -749,6 +779,8 @@ export default tool({
           state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] }
           state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
           state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
+          state.ci = { status: "pending", treeFingerprint: "" }
+          state.manualReview = { status: "pending" }
           state.nextAction = nextAction || "Reconcile the adjustment with the contract; redraft it if behavior changes, then present a new brief"
         } else if (operation === "complete") {
           if (state.status !== "ready") throw new Error(`workflow must be ready before completion (current: ${state.status})`)

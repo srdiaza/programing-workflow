@@ -6,6 +6,7 @@ import {
   implementationGateErrors,
   isProtectedBranch,
   normalizeWorkflowState,
+  readWorktreeState,
   treeFingerprint,
   type WorkflowState,
 } from "../continuous-workflow/runtime.ts"
@@ -494,6 +495,9 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
       if (!isLead(agent) && !isImplementer(agent) && !isReviewer(agent)) return
       const state = states.get(input.sessionID)
         ?? [...states.values()].find((candidate) => activeWorktree(candidate) === cwd)
+        ?? readWorktreeState(cwd)
+        ?? undefined
+      if (state) states.set(input.sessionID, state)
 
       if (isLead(agent) && /^engram_mem_/.test(input.tool)) {
         const isReadOnly = LEAD_ENGRAM_READONLY.has(input.tool)
@@ -518,6 +522,13 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           const approval = lastUserMessages.get(input.sessionID) ?? persistedUserConfirmation(current, activeWorktree(current))
           if (!approval || approval.at < Date.parse(current.updatedAt) || !approvalLooksExplicit(approval.text)) {
             throw new Error("CONTINUOUS WORKFLOW GATE: completion requires a new explicit user response after the workflow became ready")
+          }
+        }
+        if (output.args?.operation === "manual_confirm") {
+          const current = stateRequired(state)
+          const approval = lastUserMessages.get(input.sessionID) ?? persistedUserConfirmation(current, activeWorktree(current))
+          if (!approval || approval.at < Date.parse(current.updatedAt) || !approvalLooksExplicit(approval.text)) {
+            throw new Error("CONTINUOUS WORKFLOW GATE: manual review confirmation requires a new explicit user response after the result summary was presented")
           }
         }
         if (output.args?.operation === "verification_record" && state?.mode === "assessment") {
@@ -609,7 +620,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           }
         } else if (base === REVIEWER) {
           if (current.mode === "assessment") throw new Error("CONTINUOUS WORKFLOW ASSESSMENT GATE: workflow-consultant completes an assessment; an independent Reviewer is only for implementation candidates")
-          if (current.phase !== "verification") throw new Error("CONTINUOUS WORKFLOW REVIEW GATE: reviewer may run only after implementation in verification phase")
+          if (current.phase !== "verification" && current.phase !== "review") throw new Error("CONTINUOUS WORKFLOW REVIEW GATE: reviewer may run only after implementation in the verification phase or in the post-CI review window")
           if (current.verification.status !== "passed" || current.verification.treeFingerprint !== fingerprint) {
             throw new Error("CONTINUOUS WORKFLOW REVIEW GATE: current-tree verification must be recorded before reviewer delegation")
           }
@@ -704,9 +715,13 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
     "tool.execute.after": async (input, output) => {
       const agent = agentFor(input)
       if (input.tool === "workflow_state" && isLead(agent)) {
-        const state = parseState(String(output.output ?? ""))
-        if (state) states.set(input.sessionID, state)
-        else if (input.args?.operation === "status") states.delete(input.sessionID)
+        const parsed = parseState(String(output.output ?? ""))
+        if (parsed) states.set(input.sessionID, parsed)
+        else {
+          const durable = readWorktreeState(cwd)
+          if (durable) states.set(input.sessionID, durable)
+          else if (input.args?.operation === "status") states.delete(input.sessionID)
+        }
         return
       }
 

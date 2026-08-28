@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
+import { join } from "node:path"
+import { homedir } from "node:os"
 import { spawnSync } from "node:child_process"
 
 export const WORKFLOW_SCHEMA = "continuous-workflow/v2" as const
 export const LEGACY_WORKFLOW_SCHEMA = "continuous-workflow/v1" as const
-export const PHASES = ["discovery", "planning", "implementation", "verification", "delivery"] as const
-export const STATUSES = ["active", "ready", "completed", "blocked", "aborted"] as const
+export const PHASES = ["discovery", "planning", "implementation", "verification", "review", "delivery"] as const
+export const STATUSES = ["active", "post-ci", "ready", "completed", "blocked", "aborted"] as const
 export const WORKFLOW_MODES = ["implementation", "assessment"] as const
 export const DELIVERY_STRATEGIES = ["single-branch", "feature-branch-chain", "stacked-prs", "single-pr-exception"] as const
 export const VERIFICATION_TIERS = ["focused", "complete"] as const
@@ -122,6 +124,16 @@ export type WorkflowState = {
     summary: string
     recordedAt?: string
   }
+  ci: {
+    status: "pending" | "passed" | "failed"
+    treeFingerprint: string
+    recordedAt?: string
+  }
+  manualReview: {
+    status: "pending" | "approved"
+    confirmedAt?: string
+    approvalSessionID?: string
+  }
 }
 
 type LegacyState = Omit<WorkflowState, "schema" | "contract" | "implementationBrief" | "delivery" | "capabilities" | "verificationPlan" | "verification" | "review"> & {
@@ -142,6 +154,8 @@ export function normalizeWorkflowState(value: unknown): WorkflowState | null {
       ...current,
       mode: current.mode === "assessment" ? "assessment" : "implementation",
       verificationPlan: { ...(current.verificationPlan ?? { status: "missing", owner: "", reason: "", requiredChecks: [] }), artifactPaths: current.verificationPlan?.artifactPaths ?? [] },
+      ci: current.ci ?? { status: "pending", treeFingerprint: "" },
+      manualReview: current.manualReview ?? { status: "pending" },
     }
   }
   if (candidate.schema !== LEGACY_WORKFLOW_SCHEMA) return null
@@ -168,6 +182,8 @@ export function normalizeWorkflowState(value: unknown): WorkflowState | null {
     verificationPlan: { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
+    ci: { status: "pending", treeFingerprint: "" },
+    manualReview: { status: "pending" },
   }
 }
 
@@ -183,6 +199,51 @@ export function currentBranch(worktree: string): string {
 
 export function isProtectedBranch(branch: string): boolean {
   return branch === "main" || branch === "master"
+}
+
+function stateDir(): string {
+  if (process.env.CONTINUOUS_WORKFLOW_STATE_DIR) return join(process.env.CONTINUOUS_WORKFLOW_STATE_DIR, "states")
+  return join(process.env.HOME ?? homedir(), ".local", "share", "opencode", "continuous-workflow", "states")
+}
+
+function worktreeProject(worktree: string): string {
+  const remote = git(worktree, ["remote", "get-url", "origin"])
+  if (remote.ok) {
+    const name = remote.stdout.toString().trim().replace(/\.git$/, "").split(/[/:]/).pop()
+    if (name) return name
+  }
+  const root = git(worktree, ["rev-parse", "--show-toplevel"])
+  if (root.ok) {
+    const name = root.stdout.toString().trim().split("/").pop()
+    if (name) return name
+  }
+  return worktree.split("/").filter(Boolean).pop() ?? "unknown-project"
+}
+
+// Durable state recovery for the plugin gates. The state tool mirrors every
+// mutation to `$STATE_DIR/states/<sha256(project\0changeId)>.json`, so a fresh
+// healthy change is always recoverable from disk even when the plugin's
+// in-memory cache is empty (e.g. after truncation of a status output or after a
+// restart). Returns the newest matching state for a worktree or null.
+export function readWorktreeState(worktree: string): WorkflowState | null {
+  try {
+    const project = worktreeProject(worktree)
+    let best: WorkflowState | null = null
+    for (const file of readdirSync(stateDir())) {
+      if (!file.endsWith(".json")) continue
+      try {
+        const state = normalizeWorkflowState(JSON.parse(readFileSync(join(stateDir(), file), "utf8")))
+        if (!state) continue
+        if (state.worktree !== worktree && state.project !== project) continue
+        if (!best || state.version > best.version || (state.version === best.version && Date.parse(state.updatedAt) > Date.parse(best.updatedAt))) {
+          best = state
+        }
+      } catch { /* skip corrupt or non-state json */ }
+    }
+    return best
+  } catch {
+    return null
+  }
 }
 
 export function treeFingerprint(worktree: string, artifactPaths: string[] = []): string {
@@ -247,19 +308,25 @@ export function assessmentGateErrors(state: WorkflowState, worktree: string): st
 }
 
 export function readyGateErrors(state: WorkflowState, worktree: string): string[] {
-  const errors = state.mode === "assessment" ? assessmentGateErrors(state, worktree) : implementationGateErrors(state, worktree)
-  if (state.phase !== "verification" && state.phase !== "delivery") errors.push(`workflow phase must be verification or delivery (current: ${state.phase})`)
+  const errors = state.mode === "assessment" ? assessmentGateErrors(state, worktree) : []
+  if (state.phase !== "verification" && state.phase !== "review" && state.phase !== "delivery") {
+    errors.push(`workflow phase must be verification, review, or delivery (current: ${state.phase})`)
+  }
   if (state.mode !== "assessment") {
+    const impl = implementationGateErrors(state, worktree).filter((e) => !e.startsWith("workflow status must be active"))
+    errors.push(...impl)
     const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
     if (state.verification.status !== "passed" || state.verification.treeFingerprint !== fingerprint) errors.push("verification is missing or stale for the current tree")
     if (state.review.status !== "passed" || state.review.treeFingerprint !== fingerprint) errors.push("independent review is missing or stale for the current tree")
     if (state.review.findings.length > 0) errors.push(`${state.review.findings.length} review finding(s) remain unresolved`)
+    if (state.ci.status !== "passed" || state.ci.treeFingerprint !== fingerprint) errors.push("CI has not passed for the current tree")
+    if (state.manualReview.status !== "approved") errors.push("the change is not ready until the user confirms manual review of the result summary")
   }
+  if (state.capabilities.length === 0) errors.push("capability matrix is empty")
   for (const capability of state.capabilities) {
     if (capability.kind === "current" && capability.status !== "verified") errors.push(`current capability ${capability.id} is not verified`)
     if (capability.kind === "future" && capability.status !== "preserved") errors.push(`future capability ${capability.id} is not confirmed as preserved`)
     if (capability.kind === "non-goal" && capability.status !== "excluded") errors.push(`non-goal ${capability.id} is not confirmed as excluded`)
   }
-  if (state.capabilities.length === 0) errors.push("capability matrix is empty")
   return errors
 }

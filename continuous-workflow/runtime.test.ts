@@ -60,6 +60,8 @@ function state(cwd: string): WorkflowState {
     verificationPlan: { status: "planned", tier: "focused", owner: "workflow-implementer", reason: "isolated change", requiredChecks: ["focused tests"], artifactPaths: [] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
+    ci: { status: "pending", treeFingerprint: "" },
+    manualReview: { status: "pending" },
   }
 }
 
@@ -157,19 +159,28 @@ describe("Continuous Workflow v2 gates", () => {
     const cwd = repository()
     const candidate = state(cwd)
     const fingerprint = treeFingerprint(cwd)
+    candidate.status = "post-ci"
+    candidate.phase = "review"
     candidate.verification = { status: "passed", treeFingerprint: fingerprint, evidence: ["tests pass"] }
     candidate.review = { status: "passed", treeFingerprint: fingerprint, findings: [], summary: "PASS" }
+    candidate.ci = { status: "passed", treeFingerprint: fingerprint }
+    candidate.manualReview = { status: "approved" }
     expect(readyGateErrors(candidate, cwd)).toEqual([])
     writeFileSync(`${cwd}/tracked.txt`, "changed after review\n")
     expect(readyGateErrors(candidate, cwd)).toContain("verification is missing or stale for the current tree")
     expect(readyGateErrors(candidate, cwd)).toContain("independent review is missing or stale for the current tree")
+    expect(readyGateErrors(candidate, cwd)).toContain("CI has not passed for the current tree")
   })
 
   test("a concrete finding always blocks ready", () => {
     const cwd = repository()
     const candidate = state(cwd)
     const fingerprint = treeFingerprint(cwd)
+    candidate.status = "post-ci"
+    candidate.phase = "review"
     candidate.verification = { status: "passed", treeFingerprint: fingerprint, evidence: ["tests pass"] }
+    candidate.ci = { status: "passed", treeFingerprint: fingerprint }
+    candidate.manualReview = { status: "approved" }
     candidate.review = {
       status: "blocked",
       treeFingerprint: fingerprint,
@@ -179,5 +190,23 @@ describe("Continuous Workflow v2 gates", () => {
     const errors = readyGateErrors(candidate, cwd)
     expect(errors).toContain("independent review is missing or stale for the current tree")
     expect(errors).toContain("1 review finding(s) remain unresolved")
+  })
+
+  test("CI green and passing tests never make a change ready without CI passed and the user's manual review", () => {
+    const cwd = repository()
+    const fingerprint = treeFingerprint(cwd)
+    const base = state(cwd)
+    base.status = "post-ci"
+    base.phase = "review"
+    base.verification = { status: "passed", treeFingerprint: fingerprint, evidence: ["tests pass", "typecheck", "lint"] }
+    base.review = { status: "passed", treeFingerprint: fingerprint, findings: [], summary: "PASS" }
+    base.ci = { status: "pending", treeFingerprint: fingerprint }
+    base.manualReview = { status: "pending" }
+    const errors = readyGateErrors(base, cwd)
+    expect(errors).toContain("CI has not passed for the current tree")
+    expect(errors).toContain("the change is not ready until the user confirms manual review of the result summary")
+    base.ci = { status: "passed", treeFingerprint: fingerprint }
+    base.manualReview = { status: "approved" }
+    expect(readyGateErrors(base, cwd)).toEqual([])
   })
 })

@@ -52,6 +52,8 @@ function state(cwd: string, contractHash: string, phase: WorkflowState["phase"] 
     verificationPlan: { status: "planned", tier: "focused", owner: "workflow-implementer", reason: "isolated change", requiredChecks: ["focused tests"], artifactPaths: [] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
+    ci: { status: "pending", treeFingerprint: "" },
+    manualReview: { status: "pending" },
   }
 }
 
@@ -284,6 +286,33 @@ describe("Continuous Workflow plugin enforcement", () => {
       { tool: "engram_mem_save", sessionID: "lead", callID: "save-state" },
       { args: { type: "decision", title: "workflow asiento-conciliado v4", content: '{"schema":"continuous-workflow/v2","changeId":"asiento-conciliado-modal","version":4}' } },
     )).rejects.toThrow("canonical workflow persistence")
+  })
+
+  test("empty in-memory cache falls back to durable state so the Lead is not falsely blocked", async () => {
+    const repo = repository()
+    const stateDir = `${tmpdir()}/cw-state-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    process.env.CONTINUOUS_WORKFLOW_STATE_DIR = stateDir
+    try {
+      mkdirSync(`${stateDir}/states`, { recursive: true })
+      writeFileSync(`${stateDir}/states/durable.json`, JSON.stringify(state(repo.cwd, repo.contractHash)))
+      const plugin = await hooks(repo.cwd)
+      await identify(plugin, "lead", "workflow-lead")
+      // No cacheState: the plugin in-memory cache is empty; only the durable
+      // mirror on disk can satisfy the gate.
+
+      await expect(plugin["tool.execute.before"](
+        { tool: "bash", sessionID: "lead", callID: "git-add" },
+        { args: { command: "git add -A" } },
+      )).resolves.toBeUndefined()
+
+      await expect(plugin["tool.execute.before"](
+        { tool: "task", sessionID: "lead", callID: "reviewer" },
+        { args: { subagent_type: "workflow-reviewer", prompt: "review" } },
+      )).rejects.toThrow("REVIEW GATE")
+    } finally {
+      delete process.env.CONTINUOUS_WORKFLOW_STATE_DIR
+      rmSync(stateDir, { recursive: true, force: true })
+    }
   })
 
   test("complete suites have one execution owner while focused probes remain available", async () => {
