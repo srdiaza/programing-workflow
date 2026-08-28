@@ -758,11 +758,13 @@ export default tool({
           state.ci = { status: args.ci_outcome, treeFingerprint: fingerprint }
           state.nextAction = nextAction || (args.ci_outcome === "passed" ? "Run the independent reviewer on the committed tree" : "Return CI failures to workflow-implementer, then rereview")
         } else if (operation === "manual_confirm") {
-          if (state.status !== "post-ci") throw new Error("manual review confirmation applies only in the post-CI window")
+          const early = state.phase === "verification" || state.phase === "review"
+          const inWindow = state.status === "post-ci"
+          if (!early && !inWindow) throw new Error("user manual review confirmation applies right after verification or in the post-CI window")
           if (args.confirmation !== "explicit_user_manual_review") throw new Error("explicit user manual review confirmation is required")
           state = event(state, "manual_reviewed", summary || "User confirmed the result summary", context.agent, context.sessionID)
           state.manualReview = { status: "approved", confirmedAt: state.updatedAt, approvalSessionID: context.sessionID }
-          state.nextAction = nextAction || "Request ready: CI passed, review passed, and the user confirmed manual review"
+          state.nextAction = nextAction || "Reverify after any correction, run the independent review, then commit and record CI before ready"
         } else if (operation === "ready") {
           if (state.status !== "active" && state.status !== "post-ci") throw new Error(`workflow must be active or post-ci before ready (current: ${state.status})`)
           const errors = readyGateErrors(state, worktree)

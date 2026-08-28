@@ -274,17 +274,19 @@ If `status` returns `not_found` for a change that the current conversation, cont
 
 If recovery finds the change in `implementation` with an existing candidate tree but no receipt for that exact tree, do not restart the lifecycle or recreate the plan. Delegate one narrowly scoped reattachment task to `workflow-implementer`: inspect the current diff against the approved package, preserve every file, make only a necessary correction if one is found, and attest completion. Inspect that diff, then transition directly to `verification`. This restores authorship evidence; it is not a second implementation or a reason to rerun initial gates.
 
-## Post-CI review window (mandatory before ready)
+## Review order (manual visual review, then independent review, then commit + CI, then post-CI corrections)
 
-For an implementation change, after verification is recorded and the independent reviewer has run, do not go straight to `ready`. Record the commit (the delivery branch is already prepared), then enter the explicit post-CI window and pass its gates in order:
+For an implementation change, follow this order. Never skip the early manual review and never jump to `ready` because tests or CI are green.
 
-1. Call `workflow_state operation: post_ci` — transitions to phase `review`, status `post-ci`, resets the review so the reviewer must re-run on the committed tree, and records the current tree fingerprint for CI.
-2. Record the CI result with `workflow_state operation: ci_status ci_outcome: passed|failed`. If CI failed, delegate the failures to `workflow-implementer` and re-run verification/review without rewriting the contract or capability matrix (only a scope change reopens those).
-3. Run the independent reviewer again on the committed tree (`workflow-reviewer`) and record it with `review_record`.
-4. Write `<project-root>/workflow/result-summary-<change-id>.md` in business language, present it to the user, and call `workflow_state operation: manual_confirm confirmation: "explicit_user_manual_review"` — which requires a fresh, explicit user response after the summary is shown.
-5. Only then call `ready`.
+1. **Implement** (`implementation` → implementer) and record **verification** evidence (`verification_record`) in the `verification` phase.
+2. **Present the result for the user's manual/visual review.** Show the user what was implemented (the actual observable behavior or a faithful rendering). Call `workflow_state operation: manual_confirm confirmation: "explicit_user_manual_review"` — it requires a fresh, explicit user response. The user may request corrections here.
+3. **Correction round.** If the user finds issues, delegate them to `workflow-implementer` (`implementation → verification`) and move directly back to verification, reusing the contract, capability matrix, brief, and delivery setup. Only a change to the accepted scope/behavior/direction reopens the contract. Do not re-run the complete suite locally.
+4. **Independent review.** After the manual review and any corrections, run the `workflow-reviewer` (pre-CI, in the `verification` or `review` phase) and record it with `review_record`. If blocked, correct and re-review.
+5. **Commit + CI.** Record the commit (`workflow_state operation: post_ci`, which transitions to phase `review` / status `post-ci` and resets the review so it is re-run on the committed tree) and record the CI result with `ci_status ci_outcome: passed|failed`. The CI result is a signal and a place to record it, not a hard blocker by itself, but you should surface failures.
+6. **Post-CI corrections.** If CI or any later finding requires it, correct directly `review → implementation → verification → review` and re-run the independent reviewer (post-CI). Reuse the approved contract, capability matrix, brief, and delivery setup; only a material scope/behavior change reopens the contract or the full suite.
+7. **`ready` only after** the independent review is `passed` for the current tree with zero unresolved findings, the capability matrix is complete, and `manualReview` is approved by the user. Then wait for the user's explicit confirmation and call `complete`.
 
-`ready` is enforced to require all of: CI `passed` for the current tree, independent reviewer `passed` for the current tree with zero unresolved findings, the capability matrix complete, and `manualReview` approved by the user. Passing tests, a green build, or CI alone never make a change ready — the user's manual review is mandatory. Corrections made inside the post-CI window go directly `review → implementation → verification → review` and reuse the approved contract, capability matrix, brief, and delivery setup; they do not re-invoke discovery, contract approval, or a full-suite local rerun unless the accepted behavior or direction materially changes.
+The user's manual/visual review is early and mandatory — it is the cheapest place to catch what the user cares about, before the heavy independent review and commit. The independent review and the commit + CI happen afterward, and the post-CI window exists for the final correction pass.
 
 ## Completion
 
