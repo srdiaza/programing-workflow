@@ -49,7 +49,7 @@ function state(cwd: string, contractHash: string, phase: WorkflowState["phase"] 
     implementationBrief: { status: "presented", contractHash, summary: "brief" },
     delivery: { status: "prepared", strategy: "single-branch", branch: "feature/plugin-test", baseBranch: "main", worktree: cwd },
     capabilities: [{ id: "C1", behavior: "gate behavior", kind: "current", status: "pending" }],
-    verificationPlan: { status: "planned", tier: "focused", owner: "workflow-implementer", reason: "isolated change", requiredChecks: ["focused tests"], artifactPaths: [] },
+    verificationPlan: { status: "planned", tier: "focused", owner: "workflow-implementer", reason: "isolated change", requiredChecks: ["focused tests"], manualChecks: [], artifactPaths: [] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
     ci: { status: "pending", treeFingerprint: "" },
@@ -138,6 +138,7 @@ describe("Continuous Workflow plugin enforcement", () => {
       owner: "workflow-consultant",
       reason: "read-only library impact assessment",
       requiredChecks: ["inspect package changes"],
+      manualChecks: [],
       artifactPaths: [],
     }
     await cacheState(plugin, "lead", assessment)
@@ -193,6 +194,7 @@ describe("Continuous Workflow plugin enforcement", () => {
         owner: "workflow-consultant",
         reason: "read-only assessment",
         requiredChecks: ["inspect current behavior"],
+        manualChecks: [],
         artifactPaths: [],
         plannedAt: new Date().toISOString(),
       }

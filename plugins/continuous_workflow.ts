@@ -131,10 +131,12 @@ function reviewerOutcome(output: string): "passed" | "blocked" | undefined {
 
 function implementationEvidenceKind(output: string): "complete" | "correction" | "incomplete" | undefined {
   const taskResult = output.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/i)?.[1] ?? output
-  const finalLine = taskResult.trim().split(/\r?\n/).at(-1)?.trim()
-  if (/^WORKFLOW_IMPLEMENTATION_EVIDENCE:\s*COMPLETE$/i.test(finalLine ?? "")) return "complete"
-  if (/^WORKFLOW_IMPLEMENTATION_EVIDENCE:\s*CORRECTION_FOCUSED$/i.test(finalLine ?? "")) return "correction"
-  if (/^WORKFLOW_IMPLEMENTATION_EVIDENCE:\s*INCOMPLETE$/i.test(finalLine ?? "")) return "incomplete"
+  // Accept the marker anywhere in the trailing lines so a short trailing note,
+  // newline, or minor truncation of the subagent output does not lose it.
+  const tail = (taskResult.trim().split(/\r?\n/).slice(-8).filter(Boolean).join("\n") || taskResult).trim()
+  if (/\bWORKFLOW_IMPLEMENTATION_EVIDENCE:\s*COMPLETE\b/i.test(tail)) return "complete"
+  if (/\bWORKFLOW_IMPLEMENTATION_EVIDENCE:\s*CORRECTION_FOCUSED\b/i.test(tail)) return "correction"
+  if (/\bWORKFLOW_IMPLEMENTATION_EVIDENCE:\s*INCOMPLETE\b/i.test(tail)) return "incomplete"
   return undefined
 }
 
@@ -416,7 +418,7 @@ function packagePrompt(state: WorkflowState, kind: "implementation" | "verificat
     authority: kind === "implementation"
       ? correctionLoop
         ? "Apply only the listed correction. Run only the checks directly affected by that correction; do not run the complete suite again because CI will execute it on the final candidate. End the report with the exact line WORKFLOW_IMPLEMENTATION_EVIDENCE: CORRECTION_FOCUSED when those affected checks cover the corrected candidate fingerprint, otherwise end with WORKFLOW_IMPLEMENTATION_EVIDENCE: INCOMPLETE and list only the missing affected checks. This is evidence for the Lead, not a self-approval. Do not reinterpret, narrow, or modify the contract."
-        : "Implement exactly this approved package. Run focused checks as useful while working, then execute the recorded plan once after all code and test edits are frozen. End the report with the exact line WORKFLOW_IMPLEMENTATION_EVIDENCE: COMPLETE only when every required check has been run against this candidate fingerprint; otherwise end with WORKFLOW_IMPLEMENTATION_EVIDENCE: INCOMPLETE and list only the missing checks. This is evidence for the Lead, not a self-approval. Do not reinterpret, narrow, or modify the contract."
+        : "Implement exactly this approved package. Run focused checks as useful while working, then execute the recorded `requiredChecks` once after all code and test edits are frozen. The recorded `manualChecks` are human/functional proof you are not expected to execute (for example a manual UI export, a >10,000-row run, or a hand-confirmed scenario): report them as awaiting manual verification rather than treating them as failed checks. End the report with the exact line WORKFLOW_IMPLEMENTATION_EVIDENCE: COMPLETE only when every executable required check has been run against this candidate fingerprint; otherwise end with WORKFLOW_IMPLEMENTATION_EVIDENCE: INCOMPLETE and list only the missing executable checks. This is evidence for the Lead, not a self-approval. Do not reinterpret, narrow, or modify the contract."
       : kind === "verification"
         ? correctionLoop
           ? "This is a correction loop after a prior verification. Execute only checks directly affected by the listed correction; never rerun the complete suite locally because CI owns that final run. Do not repeat checks already evidenced for this candidate. Do not edit source, contracts, or Git state; do not delete, move, restore, or stash files. Declared untracked test artifacts are allowed and must be preserved. Report commands and evidence."

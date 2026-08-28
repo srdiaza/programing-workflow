@@ -425,6 +425,7 @@ export default tool({
     verification_tier: tool.schema.enum(VERIFICATION_TIERS).optional(),
     verification_reason: tool.schema.string().optional(),
     verification_required_checks: tool.schema.array(tool.schema.string()).optional(),
+    verification_manual_checks: tool.schema.array(tool.schema.string()).optional(),
     verification_artifact_paths: tool.schema.array(tool.schema.string()).optional(),
     verification_evidence: tool.schema.array(tool.schema.string()).optional(),
     review_outcome: tool.schema.enum(["passed", "blocked"]).optional(),
@@ -493,7 +494,7 @@ export default tool({
           implementationBrief: { status: "missing", contractHash: "", summary: "" },
           delivery: { status: "missing", branch: "", baseBranch: "", worktree },
           capabilities: [],
-          verificationPlan: { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] },
+          verificationPlan: { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] },
           verification: { status: "missing", treeFingerprint: "", evidence: [] },
           review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
           ci: { status: "pending", treeFingerprint: "" },
@@ -532,7 +533,7 @@ export default tool({
             if (state.implementationBrief.status === "presented") throw new Error("assessment mode cannot replace an implementation brief that has already been presented")
             state = event(state, "mode:assessment", summary, context.agent, context.sessionID)
             state.mode = "assessment"
-            state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] }
+            state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
             state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
             state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
             state.nextAction = nextAction || "Complete read-only discovery and present the functional assessment contract"
@@ -545,7 +546,7 @@ export default tool({
             state.status = "active"
             state.phase = "planning"
             state.implementationBrief = { status: "missing", contractHash: "", summary: "" }
-            state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] }
+            state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
             state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
             state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
             state.nextAction = nextAction || "Prepare a non-protected delivery branch, present the implementation brief, and record the verification plan"
@@ -576,7 +577,7 @@ export default tool({
           state.contract = { path, version, hash: actualHash, status: "draft" }
           state.implementationBrief = { status: "missing", contractHash: "", summary: "" }
           state.capabilities = []
-          state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] }
+          state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
           state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
           state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
           state.nextAction = nextAction || "Present the complete functional contract and wait for explicit approval"
@@ -657,6 +658,7 @@ export default tool({
           const tier = args.verification_tier
           const reason = asText(args.verification_reason)
           const requiredChecks = (args.verification_required_checks ?? []).map(asText).filter(Boolean)
+          const manualChecks = (args.verification_manual_checks ?? []).map(asText).filter(Boolean)
           const artifactPaths = (args.verification_artifact_paths ?? []).map(asText).filter(Boolean)
           if (artifactPaths.some((path) => path.startsWith("/") || path.includes("..") || /[*?\s]/.test(path))) throw new Error("verification_artifact_paths must be project-relative exact files or directories")
           if (!tier || !reason || requiredChecks.length === 0) throw new Error("verification_tier, verification_reason, and verification_required_checks are required")
@@ -666,9 +668,10 @@ export default tool({
             || previousPlan.owner !== (state.mode === "assessment" ? "workflow-consultant" : "workflow-implementer")
             || previousPlan.reason !== reason
             || JSON.stringify(previousPlan.requiredChecks) !== JSON.stringify(requiredChecks)
+            || JSON.stringify(previousPlan.manualChecks) !== JSON.stringify(manualChecks)
             || JSON.stringify(previousPlan.artifactPaths) !== JSON.stringify(artifactPaths)
           state = event(state, "verification_planned", summary || `${tier} verification planned`, context.agent, context.sessionID)
-          state.verificationPlan = { status: "planned", tier, owner: state.mode === "assessment" ? "workflow-consultant" : "workflow-implementer", reason, requiredChecks, artifactPaths, plannedAt: state.updatedAt }
+          state.verificationPlan = { status: "planned", tier, owner: state.mode === "assessment" ? "workflow-consultant" : "workflow-implementer", reason, requiredChecks, manualChecks, artifactPaths, plannedAt: state.updatedAt }
           if (planChanged) {
             state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
             state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
@@ -688,7 +691,7 @@ export default tool({
             throw new Error("assessment verification requires a planned workflow-consultant verification task")
           }
           if (args.phase === "planning" && ["implementation", "verification", "delivery"].includes(state.phase)) {
-            state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] }
+            state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
             state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
             state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
             state.nextAction = nextAction || "Record a new verification plan for the next implementation candidate"
@@ -776,7 +779,7 @@ export default tool({
           state.status = "active"
           state.phase = "planning"
           state.implementationBrief = { status: "missing", contractHash: "", summary: "" }
-          state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] }
+          state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
           state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
           state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
           state.ci = { status: "pending", treeFingerprint: "" }

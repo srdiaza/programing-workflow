@@ -108,6 +108,7 @@ export type WorkflowState = {
     owner: "workflow-implementer" | "workflow-consultant" | ""
     reason: string
     requiredChecks: string[]
+    manualChecks: string[]
     artifactPaths: string[]
     plannedAt?: string
   }
@@ -153,7 +154,7 @@ export function normalizeWorkflowState(value: unknown): WorkflowState | null {
     return {
       ...current,
       mode: current.mode === "assessment" ? "assessment" : "implementation",
-      verificationPlan: { ...(current.verificationPlan ?? { status: "missing", owner: "", reason: "", requiredChecks: [] }), artifactPaths: current.verificationPlan?.artifactPaths ?? [] },
+      verificationPlan: { ...(current.verificationPlan ?? { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [] }), artifactPaths: current.verificationPlan?.artifactPaths ?? [], manualChecks: current.verificationPlan?.manualChecks ?? [] },
       ci: current.ci ?? { status: "pending", treeFingerprint: "" },
       manualReview: current.manualReview ?? { status: "pending" },
     }
@@ -179,7 +180,7 @@ export function normalizeWorkflowState(value: unknown): WorkflowState | null {
       worktree: legacy.worktree ?? "",
     },
     capabilities: [],
-    verificationPlan: { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] },
+    verificationPlan: { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] },
     verification: { status: "missing", treeFingerprint: "", evidence: [] },
     review: { status: "missing", treeFingerprint: "", findings: [], summary: "" },
     ci: { status: "pending", treeFingerprint: "" },

@@ -96,7 +96,7 @@ describe("Continuous Workflow v2 gates", () => {
   test("implementation requires a complete verification plan owned by the Implementer", () => {
     const cwd = repository()
     const candidate = state(cwd)
-    candidate.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], artifactPaths: [] }
+    candidate.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
     expect(implementationGateErrors(candidate, cwd)).toContain("verification plan is missing, incomplete, or has no workflow-implementer owner")
   })
 
