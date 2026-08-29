@@ -274,7 +274,7 @@ export function treeFingerprint(worktree: string, artifactPaths: string[] = []):
 
 export function implementationGateErrors(state: WorkflowState, worktree: string): string[] {
   const errors: string[] = []
-  if (state.status !== "active") errors.push(`workflow status must be active (current: ${state.status})`)
+  if (state.status !== "active" && state.status !== "post-ci") errors.push(`workflow status must be active or post-ci (current: ${state.status})`)
   if (state.contract.status !== "approved" || !state.contract.hash) errors.push("approved functional contract is missing")
   if (state.implementationBrief.status !== "presented" || state.implementationBrief.contractHash !== state.contract.hash) {
     errors.push("implementation brief is missing or belongs to another contract version")

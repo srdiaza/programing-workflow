@@ -113,6 +113,7 @@ describe("Continuous Workflow v2 gates", () => {
       owner: "workflow-consultant",
       reason: "read-only library impact assessment",
       requiredChecks: ["inspect package changes"],
+      manualChecks: [],
       artifactPaths: [],
     }
     candidate.verification = { status: "passed", treeFingerprint: treeFingerprint(cwd), evidence: ["package comparison"] }
@@ -131,6 +132,7 @@ describe("Continuous Workflow v2 gates", () => {
       owner: "workflow-consultant",
       reason: "read-only assessment",
       requiredChecks: ["inspect current behavior"],
+      manualChecks: [],
       artifactPaths: [],
     }
     candidate.verification = { status: "passed", treeFingerprint: "assessment-run", evidence: ["consultant report"] }
@@ -204,5 +206,17 @@ describe("Continuous Workflow v2 gates", () => {
     expect(errors).toContain("the change is not ready until the user confirms manual review of the result summary")
     base.manualReview = { status: "approved" }
     expect(readyGateErrors(base, cwd)).toEqual([])
+  })
+
+  test("post-CI corrections may transition back to implementation and delegate the Implementer", () => {
+    const cwd = repository()
+    const candidate = state(cwd)
+    candidate.status = "post-ci"
+    candidate.phase = "review"
+    candidate.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
+    candidate.manualReview = { status: "approved" }
+    const errors = implementationGateErrors(candidate, cwd)
+    expect(errors).not.toContain("workflow status must be active or post-ci")
+    expect(errors.filter((e) => e.startsWith("workflow status must be"))).toEqual([])
   })
 })
