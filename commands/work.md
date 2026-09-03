@@ -2,6 +2,6 @@
 description: Start or continue the selectable Engram-backed workflow
 ---
 
-Use the selected `workflow-lead` profile protocol for this request: `$ARGUMENTS`.
+Use the selected `workflow-lead` profile to manage this request: `$ARGUMENTS`.
 
-First inspect the persisted state with `workflow_state` operation `status`. If no change exists, ask for or derive a stable change ID from the request and start it with a concrete goal and acceptance criteria. If it exists, reload its version and continue from its persisted phase. Never mutate without passing the exact `expected_version`. When verification is complete, leave the change `ready` and wait for explicit user confirmation; do not call `complete` automatically.
+Use persisted state when it is available, but treat it as context and history rather than a required sequence. If no change exists, create one when useful. If the user corrects the direction, let the Lead investigate again, consult the relevant specialists, revise the working understanding, and continue the same change. Do not restart the lifecycle or stop substantive work because a state update, receipt, phase, or version is stale. Ask for explicit confirmation only for material product decisions, dangerous operations, or completion.

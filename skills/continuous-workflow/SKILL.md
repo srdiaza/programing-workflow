@@ -46,7 +46,7 @@ The functional contract is the single approved read-back: it must enumerate the 
 
 An assessment may enter the implementation track later through explicit `mode_set`; preserve the assessment contract and findings, and do not restart discovery unnecessarily.
 
-The plugin enforces these gates. A prompt, todo, prior approval, passing build, or working partial implementation cannot bypass them.
+The plugin enforces only role ownership, safety, secret handling, protected branches, and explicit user authority. Prompts, todos, prior approvals, passing builds, and partial implementations inform the Lead but do not determine the next action.
 
 ## Subagent report contract
 
@@ -57,7 +57,18 @@ Every specialist and Reviewer returns:
 - `Findings`: each with ID, severity, category, exact location, evidence, impact, required correction, and verification after correction.
 - `Suggestions`: genuinely optional preferences only, separate from findings.
 
-Every concrete defect, regression risk, missing validation, contract mismatch, scope violation, unexpected mutation, or pre-existing/out-of-scope defect is a finding and therefore blocks delivery. Severity orders correction; it never makes a finding non-blocking. Do not say `Ship it` while findings remain. The Lead decides whether a materially out-of-scope correction needs user direction, but the finding must remain visible until resolved.
+Every concrete defect, regression risk, missing validation, contract mismatch, scope violation, unexpected mutation, or pre-existing/out-of-scope defect is a finding for the Lead. Severity orders correction. Only material product decisions, safety risks, role violations, and dangerous operations require a stop; other findings are fed back into investigation or implementation.
+
+## Open orchestration override
+
+The workflow is open and adaptive. The Lead manages the team; phases, contracts, receipts, fingerprints, and verification records describe work but do not prevent the Lead from choosing the next useful action.
+
+- A user correction can trigger another read-only investigation at any time, including while a contract is drafted or after one was approved.
+- Specialists and the Reviewer may be delegated whenever their expertise is useful. They do not require a particular phase or contract status.
+- The Implementer remains the application-code writer, but may be delegated for a correction whenever the Lead has a clear current direction. Do not wait for lifecycle receipts or a phase transition.
+- Revise the working contract when the understanding changes. Preserve prior evidence as history and ask for user approval only when a materially different user-visible behavior is about to be implemented.
+- Treat state as a recovery log. A stale fingerprint, missing receipt, invalid phase order, or version conflict is bookkeeping to recover, not a reason to stop substantive work.
+- Enforce only role ownership, destructive-operation safety, secrets, protected branches, material scope, and explicit user authority for product decisions or completion.
 
 ## Configuration
 

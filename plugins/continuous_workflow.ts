@@ -3,7 +3,6 @@ import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import {
   currentBranch,
-  implementationGateErrors,
   isProtectedBranch,
   normalizeWorkflowState,
   readWorktreeState,
@@ -26,9 +25,8 @@ const READ_ONLY_SUBAGENTS = new Set([
   "workflow-security",
   "workflow-reliability",
 ])
-// Engram tools the Lead may call at the start of Discovery to seed context from
-// prior work. These are read-only; every write (mem_save/update/delete/etc.)
-// remains blocked so `workflow_state` stays the only canonical persistence.
+// Engram tools the Lead may call to seed context from prior work. Canonical
+// workflow persistence remains exclusively in `workflow_state`.
 const LEAD_ENGRAM_READONLY = new Set([
   "engram_mem_search",
   "engram_mem_context",
@@ -52,7 +50,10 @@ const LEAD_MEM_KNOWLEDGE_TYPES = new Set([
 
 function leadMemWriteBlocked(args: any): boolean {
   const type = String(args?.type ?? "").toUpperCase()
-  if (!LEAD_MEM_KNOWLEDGE_TYPES.has(type)) return true
+  // `mem_update` is partial: callers may provide only an observation ID and
+  // the field being corrected, so an existing knowledge type is not repeated.
+  const isPartialUpdate = Number.isInteger(args?.id)
+  if (!LEAD_MEM_KNOWLEDGE_TYPES.has(type) && !isPartialUpdate) return true
   const title = String(args?.title ?? "")
   const content = String(args?.content ?? "")
   const stateMarker = /"schema"\s*:\s*"continuous-workflow\/v2"|"changeId"\s*:|"expected_version"\s*:|"treeFingerprint"\s*:\s*"|"review"\s*:\s*\{|"verification"\s*:\s*\{/i
@@ -365,7 +366,7 @@ function persistedUserConfirmation(state: WorkflowState, worktree: string): User
 }
 
 function stateRequired(state: WorkflowState | undefined): WorkflowState {
-  if (!state) throw new Error("CONTINUOUS WORKFLOW GATE: run workflow_state operation=status or start before using mutating/delegating tools")
+  if (!state) throw new Error("CONTINUOUS WORKFLOW STATE: no persisted state is available")
   return state
 }
 
@@ -404,7 +405,6 @@ function externalWorkflowInvocation(value: string): boolean {
 }
 
 function packagePrompt(state: WorkflowState, kind: "implementation" | "verification" | "review" | "consultation", fingerprint: string): string {
-  const correctionLoop = isCorrectionLoop(state)
   const packageData = {
     schema: state.schema,
     change_id: state.changeId,
@@ -415,16 +415,12 @@ function packagePrompt(state: WorkflowState, kind: "implementation" | "verificat
     verification_plan: state.verificationPlan,
     candidate_tree_fingerprint: fingerprint,
     authority: kind === "implementation"
-      ? correctionLoop
-        ? "Apply only the listed correction. Run only the checks directly affected by that correction; do not run the complete suite again because CI will execute it on the final candidate. End the report with the exact line WORKFLOW_IMPLEMENTATION_EVIDENCE: CORRECTION_FOCUSED when those affected checks cover the corrected candidate fingerprint, otherwise end with WORKFLOW_IMPLEMENTATION_EVIDENCE: INCOMPLETE and list only the missing affected checks. This is evidence for the Lead, not a self-approval. Do not reinterpret, narrow, or modify the contract."
-        : "Implement exactly this approved package. Run focused checks as useful while working, then execute the recorded `requiredChecks` once after all code and test edits are frozen. The recorded `manualChecks` are human/functional proof you are not expected to execute (for example a manual UI export, a >10,000-row run, or a hand-confirmed scenario): report them as awaiting manual verification rather than treating them as failed checks. Begin your final report with the exact line WORKFLOW_IMPLEMENTATION_EVIDENCE: COMPLETE as the first line only when every executable required check has been run against this candidate fingerprint; otherwise open with WORKFLOW_IMPLEMENTATION_EVIDENCE: INCOMPLETE and list only the missing executable checks, then give the details. This is evidence for the Lead, not a self-approval. Do not reinterpret, narrow, or modify the contract."
+      ? "Follow the Lead's current direction. Inspect, implement, test, and correct as needed. Use focused checks when useful and report commands, failures, remaining uncertainty, and any conflict in the current direction. This is evidence for the Lead, not a self-approval."
       : kind === "verification"
-        ? correctionLoop
-          ? "This is a correction loop after a prior verification. Execute only checks directly affected by the listed correction; never rerun the complete suite locally because CI owns that final run. Do not repeat checks already evidenced for this candidate. Do not edit source, contracts, or Git state; do not delete, move, restore, or stash files. Declared untracked test artifacts are allowed and must be preserved. Report commands and evidence."
-          : "Execute only the recorded verification checks that are still missing from the implementation report. Do not repeat checks already evidenced for this candidate and do not rerun a complete suite unless its final result is genuinely missing or the candidate changed. Do not edit source, contracts, or Git state; do not delete, move, restore, or stash files. Declared untracked test artifacts are allowed and must be preserved. Report commands and evidence."
-        : "Inspect against this approved package. Begin your review with the exact first line WORKFLOW_REVIEW_OUTCOME: PASS (no correction required) or WORKFLOW_REVIEW_OUTCOME: BLOCKED (one or more concrete findings remain), then report verified findings and optional suggestions separately.",
+        ? "Run the checks that answer the Lead's current question. Prefer focused checks, but do not refuse a broader check when explicitly requested. Do not edit source, contracts, or Git state; do not delete, move, restore, or stash files. Report commands and evidence."
+        : "Inspect the current request, implementation, and available evidence. Report concrete findings, uncertainty, and optional suggestions separately. This is advice for the Lead, not a lifecycle verdict.",
   }
-  return `\n\n## Continuous Workflow enforced package\n\`\`\`json\n${JSON.stringify(packageData, null, 2)}\n\`\`\`\n`
+  return `\n\n## Continuous Workflow working context\nThis context is advisory. Follow the current user direction and the Lead's task. If new evidence conflicts with it, report the conflict and continue the investigation or correction instead of stopping for a lifecycle reset.\n\`\`\`json\n${JSON.stringify(packageData, null, 2)}\n\`\`\`\n`
 }
 
 function discoveryPrompt(state: WorkflowState, fingerprint: string): string {
@@ -433,9 +429,9 @@ function discoveryPrompt(state: WorkflowState, fingerprint: string): string {
     user_goal: state.goal,
     acceptance_criteria: state.acceptanceCriteria,
     candidate_tree_fingerprint: fingerprint,
-    authority: "Pre-contract, read-only discovery only. Establish facts about current behavior, visible terminology, data, constraints, and genuine ambiguities. Do not edit files, write a contract, choose product scope, design the solution, or implement anything. Report evidence and questions for workflow-lead to synthesize into a user-facing contract.",
+    authority: "Read-only investigation directed by workflow-lead. Establish facts about current behavior, visible terminology, data, constraints, and the user's latest direction. This may be a new investigation or a follow-up after the user corrected the Lead. Do not edit files or choose product scope; report evidence, conflicts, and recommendations for workflow-lead to synthesize.",
   }
-  return `\n\n## Continuous Workflow pre-contract discovery\n\`\`\`json\n${JSON.stringify(discovery, null, 2)}\n\`\`\`\n`
+  return `\n\n## Continuous Workflow investigation context\nThis context is advisory. The Lead may request another investigation whenever new information changes the working hypothesis.\n\`\`\`json\n${JSON.stringify(discovery, null, 2)}\n\`\`\`\n`
 }
 
 export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
@@ -494,9 +490,14 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
     "tool.execute.before": async (input, output) => {
       const agent = agentFor(input)
       if (!isLead(agent) && !isImplementer(agent) && !isReviewer(agent)) return
-      const state = states.get(input.sessionID)
-        ?? [...states.values()].find((candidate) => activeWorktree(candidate) === cwd)
-        ?? readWorktreeState(cwd)
+      // Durable state is canonical and must win over stale snapshots from a
+      // previous session, especially when a subagent runs in the same tree.
+      const cachedStates = [...states.values()]
+        .filter((candidate) => activeWorktree(candidate) === cwd)
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+      const state = readWorktreeState(cwd)
+        ?? states.get(input.sessionID)
+        ?? cachedStates[0]
         ?? undefined
       if (state) states.set(input.sessionID, state)
 
@@ -511,7 +512,7 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
 
       if (input.tool === "workflow_state") {
         if (!isLead(agent)) throw new Error("CONTINUOUS WORKFLOW GATE: only workflow-lead may mutate or read canonical workflow_state")
-        if (output.args?.operation === "contract_approve" || output.args?.operation === "contract_metadata_reconcile") {
+        if (output.args?.operation === "contract_approve") {
           const current = stateRequired(state)
           const approval = lastUserMessages.get(input.sessionID) ?? persistedUserConfirmation(current, activeWorktree(current))
           if (!approval || approval.at < Date.parse(current.updatedAt) || !approvalLooksExplicit(approval.text)) {
@@ -532,116 +533,36 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
             throw new Error("CONTINUOUS WORKFLOW GATE: manual review confirmation requires a new explicit user response after the result summary was presented")
           }
         }
-        if (output.args?.operation === "verification_record" && state?.mode === "assessment") {
-          const current = stateRequired(state)
-          // Assessment evidence belongs to its recorded read-only plan. It
-          // must not become stale merely because an unrelated file changed
-          // after the consultant finished. The receipt still proves that a
-          // consultant task completed without mutating the tree.
-          if (current.verification.status !== "passed") {
-            const currentWorktree = activeWorktree(current)
-            const receipt = verificationReceipts.get(input.sessionID)
-              ?? persistedVerificationReceipt(current, currentWorktree, workflowFingerprint(current, currentWorktree))
-            if (!receipt || receipt.planKey !== verificationPlanKey(current)) {
-              throw new Error("CONTINUOUS WORKFLOW ASSESSMENT RECEIPT: complete the recorded read-only workflow-consultant assessment once before recording verification; do not retry verification_record without a new consultant result")
-            }
-          }
-        }
-        if (output.args?.operation === "transition" && output.args?.phase === "verification") {
-          const current = stateRequired(state)
-          if (current.mode === "assessment") {
-            if (current.phase !== "planning" || current.verificationPlan.status !== "planned" || current.verificationPlan.owner !== "workflow-consultant") {
-              throw new Error("CONTINUOUS WORKFLOW ASSESSMENT RECEIPT: transition to verification requires the recorded read-only assessment plan owned by workflow-consultant")
-            }
-          } else {
-            const currentWorktree = activeWorktree(current)
-            const fingerprint = workflowFingerprint(current, currentWorktree)
-            const receipt = implementationReceipts.get(input.sessionID) ?? persistedImplementationReceipt(current, currentWorktree, fingerprint)
-            if (current.phase !== "implementation" || !receipt || receipt.fingerprint !== fingerprint) {
-              throw new Error("CONTINUOUS WORKFLOW IMPLEMENTATION RECEIPT: transition to verification requires a completed workflow-implementer task for the current tree; after recovery, delegate one reattachment task for workflow-implementer to inspect and attest the existing candidate (no lifecycle reset or rewrite)")
-            }
-            if (!implementationEvidenceSufficient(receipt.output, current)) {
-              throw new Error("CONTINUOUS WORKFLOW IMPLEMENTATION EVIDENCE: the implementation task did not provide final evidence for the recorded plan; delegate only the missing checks, not a second full verification")
-            }
-          }
-        }
-        if (output.args?.operation === "review_record") {
-          const current = stateRequired(state)
-          const currentWorktree = activeWorktree(current)
-          const receipt = reviewReceipts.get(input.sessionID) ?? persistedReviewReceipt(current, currentWorktree)
-          const fingerprint = workflowFingerprint(current, currentWorktree)
-          if (!receipt || receipt.fingerprint !== fingerprint || current.verification.treeFingerprint !== fingerprint) {
-            throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: review_record requires workflow-reviewer output for the currently verified tree")
-          }
-          const reportedOutcome = reviewerOutcome(receipt.output)
-          if (output.args?.review_outcome === "passed" && reportedOutcome !== "passed") {
-            throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: a passing state requires the final exact line WORKFLOW_REVIEW_OUTCOME: PASS")
-          }
-          if (output.args?.review_outcome === "blocked" && reportedOutcome !== "blocked") {
-            throw new Error("CONTINUOUS WORKFLOW REVIEW RECEIPT: blocked review state requires the final exact line WORKFLOW_REVIEW_OUTCOME: BLOCKED")
-          }
-        }
         return
       }
 
       if (input.tool === "task") {
         if (!isLead(agent)) throw new Error("CONTINUOUS WORKFLOW GATE: workflow-implementer cannot delegate")
-        const current = stateRequired(state)
+        const current = state
         const requested = typeof output.args?.subagent_type === "string" ? output.args.subagent_type : ""
         if (externalWorkflowInvocation(requested)) {
           throw new Error("CONTINUOUS WORKFLOW INDEPENDENCE GATE: external workflow agents are not permitted")
         }
         const base = baseAgent(requested)
         const currentWorktree = activeWorktree(current)
-        const fingerprint = workflowFingerprint(current, currentWorktree)
+        const fingerprint = current ? workflowFingerprint(current, currentWorktree) : treeFingerprint(currentWorktree)
         const key = `${input.sessionID}:${input.callID}`
         let taskKind: TaskSnapshot["kind"] = "consultation"
 
         if (base === IMPLEMENTER) {
-          if (current.mode === "assessment") {
+          if (current?.mode === "assessment") {
             throw new Error("CONTINUOUS WORKFLOW ASSESSMENT GATE: an assessment is read-only; do not delegate workflow-implementer unless the user explicitly requests implementation and the Lead first enters implementation mode")
           }
-          if (current.phase === "verification") {
-            if (current.verificationPlan.status !== "planned") throw new Error("CONTINUOUS WORKFLOW VERIFICATION GATE: record the verification plan before delegating verification")
-            const currentReceipt = implementationReceipts.get(input.sessionID) ?? persistedImplementationReceipt(current, currentWorktree, fingerprint)
-            if (current.verification.status === "passed") {
-              throw new Error("CONTINUOUS WORKFLOW VERIFICATION EVIDENCE: verification is already recorded for the current candidate; do not delegate the implementer again")
-            }
-            if (currentReceipt?.fingerprint === fingerprint && implementationEvidenceSufficient(currentReceipt.output, current)) {
-              throw new Error("CONTINUOUS WORKFLOW VERIFICATION EVIDENCE: final implementation evidence already covers the current tree; record verification directly instead of rerunning the implementer")
-            }
-            taskKind = "verification"
-            output.args.prompt = `${String(output.args.prompt ?? "")}\nRun only the checks from the recorded plan that are still missing from the implementation report. Do not repeat checks already reported for this candidate, and do not rerun the complete suite unless the Lead identifies a concrete missing final result.\n${packagePrompt(current, "verification", fingerprint)}`
-          } else {
-            const errors = implementationGateErrors(current, currentWorktree)
-            if (current.phase !== "implementation") errors.push(`workflow phase must be implementation (current: ${current.phase})`)
-            if (errors.length) throw new Error(`CONTINUOUS WORKFLOW IMPLEMENTER GATE: ${errors.join("; ")}`)
-            taskKind = "implementation"
-            output.args.prompt = `${String(output.args.prompt ?? "")}${packagePrompt(current, "implementation", fingerprint)}`
-          }
+          taskKind = "implementation"
+          output.args.prompt = `${String(output.args.prompt ?? "")}${current ? packagePrompt(current, "implementation", fingerprint) : "\n\n## Open workflow\nWork on the Lead's current direction. Inspect, implement, test, and correct as needed; report blockers without requiring a lifecycle reset.\n"}`
         } else if (base === REVIEWER) {
-          if (current.mode === "assessment") throw new Error("CONTINUOUS WORKFLOW ASSESSMENT GATE: workflow-consultant completes an assessment; an independent Reviewer is only for implementation candidates")
-          if (current.phase !== "verification" && current.phase !== "review") throw new Error("CONTINUOUS WORKFLOW REVIEW GATE: reviewer may run only after implementation in the verification phase or in the post-CI review window")
-          if (current.verification.status !== "passed" || current.verification.treeFingerprint !== fingerprint) {
-            throw new Error("CONTINUOUS WORKFLOW REVIEW GATE: current-tree verification must be recorded before reviewer delegation")
-          }
+          if (current?.mode === "assessment") throw new Error("CONTINUOUS WORKFLOW ASSESSMENT GATE: workflow-consultant completes an assessment; an independent Reviewer is only for implementation candidates")
           taskKind = "review"
-          output.args.prompt = `${String(output.args.prompt ?? "")}${packagePrompt(current, "review", fingerprint)}`
+          output.args.prompt = `${String(output.args.prompt ?? "")}${current ? packagePrompt(current, "review", fingerprint) : "\n\n## Open workflow review\nReview the current request, diff, and observable behavior. Report concrete findings and optional suggestions separately; do not wait for a lifecycle gate.\n"}`
         } else if (READ_ONLY_SUBAGENTS.has(base)) {
-          const preContractDiscovery = current.phase === "discovery" && current.contract.status === "missing"
-          if (!preContractDiscovery && current.contract.status !== "approved") {
-            throw new Error("CONTINUOUS WORKFLOW CONSULTATION GATE: approve the functional contract before specialist delegation outside pre-contract discovery")
-          }
-          const assessmentVerification = current.mode === "assessment"
-            && current.phase === "verification"
-            && current.verification.status === "missing"
-            && current.verificationPlan.status === "planned"
-            && current.verificationPlan.owner === "workflow-consultant"
-            && base === "workflow-consultant"
-          taskKind = preContractDiscovery ? "discovery" : assessmentVerification ? "verification" : "consultation"
-          output.args.prompt = `${String(output.args.prompt ?? "")}${preContractDiscovery
-            ? discoveryPrompt(current, fingerprint)
-            : packagePrompt(current, assessmentVerification ? "verification" : "consultation", fingerprint)}`
+          const investigation = current && current.phase === "discovery" ? "discovery" : "consultation"
+          taskKind = investigation
+          output.args.prompt = `${String(output.args.prompt ?? "")}${current ? (investigation === "discovery" ? discoveryPrompt(current, fingerprint) : packagePrompt(current, "consultation", fingerprint)) : "\n\n## Open workflow investigation\nInvestigate the Lead's current question. This is read-only and may be a follow-up after the user corrected the direction. Return evidence and recommendations; do not wait for a contract gate.\n"}`
         }
 
         taskSnapshots.set(key, {
@@ -649,10 +570,10 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           kind: taskKind,
           worktree: currentWorktree,
           fingerprint,
-          artifactPaths: current.verificationPlan.artifactPaths,
-          contractHash: contractHash(current, currentWorktree),
-          contractPath: current.contract.path,
-          planKey: taskKind === "verification" ? verificationPlanKey(current) : undefined,
+          artifactPaths: current?.verificationPlan.artifactPaths ?? [],
+          contractHash: current ? contractHash(current, currentWorktree) : "",
+          contractPath: current?.contract.path ?? "",
+          planKey: undefined,
         })
         return
       }
@@ -665,11 +586,6 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
           const relative = paths.map((path) => projectRelative(path, currentWorktree))
           if (relative.length === 0 || relative.some((path) => path !== current.contract.path)) {
             throw new Error(`CONTINUOUS WORKFLOW AUTHORSHIP GATE: workflow-lead may edit only ${current.contract.path}; delegate application code and tests to workflow-implementer`)
-          }
-          if (current.status !== "active") throw new Error(`CONTINUOUS WORKFLOW CONTRACT GATE: contract cannot be edited while workflow status is ${current.status}`)
-          const branch = currentBranch(currentWorktree)
-          if (current.mode !== "assessment" && (current.delivery.status !== "prepared" || current.delivery.worktree !== currentWorktree || current.delivery.branch !== branch || isProtectedBranch(branch))) {
-            throw new Error("CONTINUOUS WORKFLOW DELIVERY GATE: prepare and record a non-protected branch/worktree before editing the functional contract")
           }
         } else if (isImplementer(agent)) {
           const current = state
@@ -693,22 +609,13 @@ export const ContinuousWorkflow: Plugin = async ({ directory, worktree }) => {
         if (isLead(agent)) {
           if (forbiddenLeadGit(command)) throw new Error("CONTINUOUS WORKFLOW SAFETY GATE: destructive or history-rewriting Git operation is forbidden for workflow-lead")
           if (forbiddenLeadFileMutation(command)) throw new Error("CONTINUOUS WORKFLOW AUTHORSHIP GATE: workflow-lead cannot mutate project files through Bash; use the contract edit gate or workflow-implementer")
-          if (!state && !readOnlyBash(command) && !/^git\s+(switch\s+-c|checkout\s+-b)(\s|$)/.test(command)) {
-            throw new Error("CONTINUOUS WORKFLOW BOOTSTRAP GATE: run workflow_state status/start before non-read-only Bash")
-          }
-          if (fullSuiteCommand(command)) throw new Error("CONTINUOUS WORKFLOW VERIFICATION OWNERSHIP: workflow-lead selects and records verification; workflow-implementer runs the complete suite once after code is frozen")
         } else if (isImplementer(agent)) {
-          if (fullSuiteCommand(command) && state && isCorrectionLoop(state)) {
-            throw new Error("CONTINUOUS WORKFLOW CORRECTION GATE: the candidate already passed through verification; run only checks affected by this correction and leave the complete suite to CI")
-          }
           if (/(^|\s)git\s+(push|add|commit|restore|reset|clean|stash|checkout|switch|merge|rebase|cherry-pick|revert|branch\s+-[dDmMcC])(\s|$)/.test(command)) {
             throw new Error("CONTINUOUS WORKFLOW IMPLEMENTER GATE: implementer cannot mutate Git state, history, branches, or remotes")
           }
           if (/(^|[;&|]\s*)(?:rm|mv)\s/.test(command)) {
             throw new Error("CONTINUOUS WORKFLOW ARTIFACT SAFETY: implementer cannot delete or move project files to satisfy verification or review")
           }
-        } else if (isReviewer(agent) && fullSuiteCommand(command)) {
-          throw new Error("CONTINUOUS WORKFLOW VERIFICATION OWNERSHIP: workflow-reviewer must not repeat the complete suite; perform only a targeted probe when review evidence has a concrete gap")
         }
       }
     },

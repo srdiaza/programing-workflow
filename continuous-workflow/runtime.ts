@@ -236,7 +236,10 @@ export function readWorktreeState(worktree: string): WorkflowState | null {
         const state = normalizeWorkflowState(JSON.parse(readFileSync(join(stateDir(), file), "utf8")))
         if (!state) continue
         if (state.worktree !== worktree && state.project !== project) continue
-        if (!best || state.version > best.version || (state.version === best.version && Date.parse(state.updatedAt) > Date.parse(best.updatedAt))) {
+        // Version numbers are only monotonic within one changeId. Several
+        // changes can share a worktree, so recency must be determined first
+        // by the durable timestamp and only then by version.
+        if (!best || Date.parse(state.updatedAt) > Date.parse(best.updatedAt) || (Date.parse(state.updatedAt) === Date.parse(best.updatedAt) && state.version > best.version)) {
           best = state
         }
       } catch { /* skip corrupt or non-state json */ }

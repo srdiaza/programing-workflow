@@ -18,7 +18,6 @@ import {
   WORKFLOW_SCHEMA,
   currentBranch,
   expectedContractPath,
-  implementationGateErrors,
   isProtectedBranch,
   normalizeWorkflowState,
   readyGateErrors,
@@ -27,7 +26,6 @@ import {
   type Capability,
   type Finding,
   type Owner,
-  type Phase,
   type WorkflowState,
 } from "../continuous-workflow/runtime.ts"
 
@@ -320,23 +318,6 @@ function leaseActive(owner: Owner): boolean {
 
 function ensureOwner(state: WorkflowState, sessionID: string): void {
   if (state.owner.sessionID !== sessionID) throw new Error(`change is owned by session ${state.owner.sessionID}`)
-  if (!leaseActive(state.owner)) throw new Error("workflow lease expired; run recover before mutating it")
-}
-
-function transitionAllowed(from: Phase, to: Phase): boolean {
-  const allowed: Record<Phase, Phase[]> = {
-    discovery: ["planning"],
-    planning: ["implementation", "discovery"],
-    implementation: ["verification", "planning"],
-    verification: ["review", "delivery", "implementation", "planning"],
-    review: ["implementation", "verification", "delivery", "planning"],
-    delivery: ["verification", "planning"],
-  }
-  return allowed[from].includes(to)
-}
-
-function assessmentTransitionAllowed(state: WorkflowState, to: Phase): boolean {
-  return state.mode === "assessment" && state.phase === "planning" && to === "verification"
 }
 
 function event(state: WorkflowState, name: string, summary: string, agent: string, sessionID: string): WorkflowState {
@@ -403,7 +384,7 @@ const findingSchema = tool.schema.object({
 })
 
 export default tool({
-  description: "Manage Continuous Workflow v2 assessment and implementation tracks. Contract, evidence, delivery, verification, review, recovery, and completion gates are typed and enforced; only workflow-lead may mutate canonical state.",
+  description: "Record the open workflow's current context, decisions, evidence, and delivery status. Only workflow-lead may mutate canonical state; ordering is advisory and safety/authority boundaries remain enforced.",
   args: {
     operation: tool.schema.enum(["start", "status", "claim", "recover", "mode_set", "delivery_prepare", "contract_draft", "contract_approve", "contract_metadata_reconcile", "capabilities_record", "capabilities_evidence", "brief_present", "verification_plan", "transition", "checkpoint", "consultation", "verification_record", "review_record", "post_ci", "ci_status", "manual_confirm", "ready", "complete", "reopen", "abort"]),
     change_id: tool.schema.string().describe("Stable change identifier"),
@@ -529,27 +510,14 @@ export default tool({
           if (!summary) throw new Error("summary is required for mode_set and must identify the user's decision")
           if (targetMode === state.mode) throw new Error(`workflow is already in ${targetMode} mode`)
           if (targetMode === "assessment") {
-            if (state.phase !== "discovery" && state.phase !== "planning") throw new Error("assessment mode can only be selected before implementation starts")
-            if (state.implementationBrief.status === "presented") throw new Error("assessment mode cannot replace an implementation brief that has already been presented")
             state = event(state, "mode:assessment", summary, context.agent, context.sessionID)
             state.mode = "assessment"
-            state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
-            state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
-            state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
-            state.nextAction = nextAction || "Complete read-only discovery and present the functional assessment contract"
+            state.nextAction = nextAction || "Continue the investigation or implementation from the user's latest direction"
           } else {
-            if (state.mode !== "assessment") throw new Error("implementation mode can only be entered from assessment mode")
-            if (state.contract.status !== "approved") throw new Error("approve the assessment contract before entering implementation mode")
-            if (state.phase === "discovery") throw new Error("finish the investigation and assessment contract before entering implementation mode")
             state = event(state, "mode:implementation", summary, context.agent, context.sessionID)
             state.mode = "implementation"
             state.status = "active"
-            state.phase = "planning"
-            state.implementationBrief = { status: "missing", contractHash: "", summary: "" }
-            state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
-            state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
-            state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
-            state.nextAction = nextAction || "Prepare a non-protected delivery branch, present the implementation brief, and record the verification plan"
+            state.nextAction = nextAction || "Continue the investigation or implementation from the user's latest direction"
           }
         } else if (operation === "delivery_prepare") {
           if (state.mode === "assessment") throw new Error("assessment mode does not require delivery preparation; record its read-only verification plan instead")
@@ -563,10 +531,6 @@ export default tool({
           state.worktree = worktree
           state.nextAction = nextAction || `Draft ${expectedContractPath(changeId)}`
         } else if (operation === "contract_draft") {
-          const branch = currentBranch(worktree)
-          if (state.mode !== "assessment" && (state.delivery.status !== "prepared" || state.delivery.worktree !== worktree || state.delivery.branch !== branch || isProtectedBranch(branch))) {
-            throw new Error("prepare and record a non-protected delivery branch/worktree before drafting the functional contract")
-          }
           const path = asText(args.contract_path) || expectedContractPath(changeId)
           if (path !== expectedContractPath(changeId)) throw new Error(`contract_path must be exactly ${expectedContractPath(changeId)}`)
           const version = args.contract_version ?? 0
@@ -575,12 +539,7 @@ export default tool({
           if (asText(args.contract_hash) && asText(args.contract_hash) !== actualHash) throw new Error("contract_hash does not match the contract file")
           state = event(state, "contract_drafted", summary || `Contract v${version} drafted`, context.agent, context.sessionID)
           state.contract = { path, version, hash: actualHash, status: "draft" }
-          state.implementationBrief = { status: "missing", contractHash: "", summary: "" }
-          state.capabilities = []
-          state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
-          state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
-          state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
-          state.nextAction = nextAction || "Present the complete functional contract and wait for explicit approval"
+          state.nextAction = nextAction || "Review the current contract draft, consult the team again if needed, then present it for explicit approval"
         } else if (operation === "contract_approve") {
           if (args.confirmation !== "explicit_user_contract_approval") throw new Error("explicit_user_contract_approval confirmation is required")
           if (state.contract.status !== "draft") throw new Error("only a drafted contract can be approved")
@@ -593,18 +552,13 @@ export default tool({
             ? "Record the capability matrix, complete the investigation, and prepare the assessment verification"
             : "Record the capability matrix and obtain any required technical consultations")
         } else if (operation === "contract_metadata_reconcile") {
-          if (args.confirmation !== "explicit_user_contract_approval") throw new Error("explicit_user_contract_approval confirmation is required")
-          if (state.contract.status !== "approved") throw new Error("administrative reconciliation requires an already approved contract")
-          if (state.phase !== "verification" && state.phase !== "delivery") throw new Error("administrative reconciliation is allowed only after implementation, during verification or delivery")
+          if (state.contract.status !== "approved" && state.contract.status !== "draft") throw new Error("administrative reconciliation requires an existing contract record")
           const actualHash = actualContractHash(worktree, state.contract.path)
           if (!asText(args.contract_hash) || asText(args.contract_hash) !== actualHash) throw new Error("administrative reconciliation must reference the exact current contract hash")
           if (!summary) throw new Error("summary must describe the administrative correction and user confirmation")
           state = event(state, "contract_metadata_reconciled", summary, context.agent, context.sessionID)
-          state.contract = { ...state.contract, version: state.contract.version + 1, hash: actualHash, status: "approved", approvedAt: state.updatedAt, approvalSessionID: context.sessionID, approvalEvidence: summary }
-          state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
-          state.nextAction = nextAction || (state.mode === "assessment"
-            ? "Continue the existing read-only assessment evidence; do not restart discovery or run an implementation review"
-            : "Launch a fresh independent review against the reconciled approved contract and current verified tree")
+          state.contract = { ...state.contract, hash: actualHash, status: state.contract.status === "approved" ? "approved" : "draft", approvedAt: state.contract.approvedAt, approvalSessionID: state.contract.approvalSessionID, approvalEvidence: state.contract.approvalEvidence }
+          state.nextAction = nextAction || "Continue from the user's latest direction; this administrative correction did not change product scope"
         } else if (operation === "capabilities_record") {
           if (state.contract.status !== "approved") throw new Error("approve the contract before recording capabilities")
           const capabilities = (args.capabilities ?? []) as Capability[]
@@ -684,25 +638,7 @@ export default tool({
           state = event(state, kind, summary || `${kind} consolidated by Lead`, context.agent, context.sessionID)
           state.consultations = [...state.consultations, { kind, actor: context.agent, sessionID: context.sessionID, summary: summary || `${kind} consolidated by Lead`, at: state.updatedAt }].slice(-100)
         } else if (operation === "transition") {
-          if (!args.phase || (!transitionAllowed(state.phase, args.phase) && !assessmentTransitionAllowed(state, args.phase))) throw new Error(`invalid phase transition ${state.phase} -> ${args.phase ?? "(missing)"}`)
-          if (args.phase === "planning" && state.contract.status !== "approved") throw new Error("planning requires an approved contract")
-          if (args.phase === "implementation" && state.mode === "assessment") throw new Error("assessment mode cannot enter implementation directly; use mode_set after the user explicitly requests implementation")
-          if (args.phase === "verification" && state.mode === "assessment" && (state.verificationPlan.status !== "planned" || state.verificationPlan.owner !== "workflow-consultant")) {
-            throw new Error("assessment verification requires a planned workflow-consultant verification task")
-          }
-          if (args.phase === "planning" && ["implementation", "verification", "delivery"].includes(state.phase)) {
-            state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
-            state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
-            state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
-            state.nextAction = nextAction || "Record a new verification plan for the next implementation candidate"
-          }
-          if (args.phase === "implementation") {
-            const errors = implementationGateErrors(state, worktree)
-            if (errors.length) throw new Error(`implementation gate failed: ${errors.join("; ")}`)
-            if (state.capabilities.length === 0) throw new Error("implementation gate failed: capability matrix is empty")
-            state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
-            state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
-          }
+          if (!args.phase) throw new Error("phase is required")
           state = event(state, `phase:${args.phase}`, summary || `Transitioned to ${args.phase}`, context.agent, context.sessionID)
           state.phase = args.phase
           if (nextAction) state.nextAction = nextAction
@@ -713,11 +649,8 @@ export default tool({
           state = event(state, "checkpoint", summary || "Checkpoint", context.agent, context.sessionID)
           if (nextAction) state.nextAction = nextAction
         } else if (operation === "verification_record") {
-          if (state.phase !== "verification") throw new Error("verification can only be recorded in verification phase")
           const evidence = (args.verification_evidence ?? []).map(asText).filter(Boolean)
           if (evidence.length === 0) throw new Error("verification_evidence is required")
-          const verificationOwner = state.mode === "assessment" ? "workflow-consultant" : "workflow-implementer"
-          if (state.verificationPlan.status !== "planned" || !state.verificationPlan.tier || state.verificationPlan.owner !== verificationOwner) throw new Error(`verification requires a planned ${verificationOwner} verification plan`)
           const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
           state = event(state, "verification_passed", summary || `${evidence.length} verification evidence item(s) recorded`, context.agent, context.sessionID)
           state.verification = { status: "passed", treeFingerprint: fingerprint, evidence, recordedAt: state.updatedAt }
@@ -726,9 +659,6 @@ export default tool({
             ? "Record capability evidence and present the assessment recommendation"
             : "Launch independent review against the verified tree")
         } else if (operation === "review_record") {
-          if (state.mode === "assessment") throw new Error("assessment does not require an independent review; present the consultant recommendation instead")
-          if (state.phase !== "verification" && state.phase !== "review") throw new Error("review can only be recorded in verification or the post-CI review phase")
-          if (state.verification.status !== "passed" || state.verification.treeFingerprint !== treeFingerprint(worktree, state.verificationPlan.artifactPaths)) throw new Error("review requires current verification evidence")
           if (!args.review_outcome) throw new Error("review_outcome is required")
           const findings = (args.findings ?? []) as Finding[]
           if (args.review_outcome === "passed" && findings.length > 0) throw new Error("a passed review cannot contain findings")
@@ -738,10 +668,6 @@ export default tool({
           state.review = { status: args.review_outcome, treeFingerprint: fingerprint, findings, summary: summary || "", recordedAt: state.updatedAt }
           state.nextAction = nextAction || (args.review_outcome === "passed" ? "Request ready after confirming capability evidence" : "Return all findings to workflow-implementer, then reverify and rereview")
         } else if (operation === "post_ci") {
-          if (state.mode === "assessment") throw new Error("assessment does not enter the post-CI window")
-          if (state.phase !== "verification") throw new Error("the post-CI window requires the verification phase")
-          if (state.delivery.status !== "prepared") throw new Error("prepare the delivery branch/worktree before the post-CI window")
-          if (state.verification.status !== "passed") throw new Error("verification must pass before the post-CI window")
           const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
           state = event(state, "post_ci", summary || "Entered the post-CI review window", context.agent, context.sessionID)
           state.status = "post-ci"
@@ -751,42 +677,32 @@ export default tool({
           state.manualReview = { status: "pending" }
           state.nextAction = nextAction || "Record the CI result, then run the independent reviewer on the committed tree"
         } else if (operation === "ci_status") {
-          if (state.status !== "post-ci") throw new Error("the CI result can only be recorded in the post-CI window")
           if (!args.ci_outcome) throw new Error("ci_outcome is required (passed | failed)")
           const fingerprint = treeFingerprint(worktree, state.verificationPlan.artifactPaths)
           state = event(state, args.ci_outcome === "passed" ? "ci_passed" : "ci_failed", summary || `CI ${args.ci_outcome}`, context.agent, context.sessionID)
           state.ci = { status: args.ci_outcome, treeFingerprint: fingerprint }
           state.nextAction = nextAction || (args.ci_outcome === "passed" ? "Run the independent reviewer on the committed tree" : "Return CI failures to workflow-implementer, then rereview")
         } else if (operation === "manual_confirm") {
-          const early = state.phase === "verification" || state.phase === "review"
-          const inWindow = state.status === "post-ci"
-          if (!early && !inWindow) throw new Error("user manual review confirmation applies right after verification or in the post-CI window")
           if (args.confirmation !== "explicit_user_manual_review") throw new Error("explicit user manual review confirmation is required")
           state = event(state, "manual_reviewed", summary || "User confirmed the result summary", context.agent, context.sessionID)
           state.manualReview = { status: "approved", confirmedAt: state.updatedAt, approvalSessionID: context.sessionID }
           state.nextAction = nextAction || "Reverify after any correction, run the independent review, then commit and record CI before ready"
         } else if (operation === "ready") {
-          if (state.status !== "active" && state.status !== "post-ci") throw new Error(`workflow must be active or post-ci before ready (current: ${state.status})`)
           const errors = readyGateErrors(state, worktree)
-          if (errors.length) throw new Error(`ready gate failed: ${errors.join("; ")}`)
           state = event(state, "ready_for_confirmation", summary || (state.mode === "assessment"
             ? "Assessment is ready; waiting for the user's decision"
             : "Implementation is ready; waiting for explicit user confirmation"), context.agent, context.sessionID)
           state.status = "ready"
           state.phase = "delivery"
-          state.nextAction = nextAction || "Await explicit user confirmation before completing this change"
+          state.nextAction = nextAction || (errors.length
+            ? `Review remains advisory; open items: ${errors.join("; ")}`
+            : "Await explicit user confirmation before completing this change")
         } else if (operation === "reopen") {
           if (state.status !== "ready") throw new Error(`only a ready workflow can be reopened (current: ${state.status})`)
           state = event(state, "reopened", summary || "User requested another adjustment before completion", context.agent, context.sessionID)
           state.status = "active"
-          state.phase = "planning"
-          state.implementationBrief = { status: "missing", contractHash: "", summary: "" }
-          state.verificationPlan = { status: "missing", owner: "", reason: "", requiredChecks: [], manualChecks: [], artifactPaths: [] }
-          state.verification = { status: "missing", treeFingerprint: "", evidence: [] }
-          state.review = { status: "missing", treeFingerprint: "", findings: [], summary: "" }
-          state.ci = { status: "pending", treeFingerprint: "" }
-          state.manualReview = { status: "pending" }
-          state.nextAction = nextAction || "Reconcile the adjustment with the contract; redraft it if behavior changes, then present a new brief"
+          state.phase = state.mode === "assessment" ? "verification" : "implementation"
+          state.nextAction = nextAction || "Continue from the user's latest direction; consult or correct the implementation as needed"
         } else if (operation === "complete") {
           if (state.status !== "ready") throw new Error(`workflow must be ready before completion (current: ${state.status})`)
           if (args.confirmation !== "explicit_user_confirmation") throw new Error("explicit user confirmation is required before completion")

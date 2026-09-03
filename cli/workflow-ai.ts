@@ -89,7 +89,7 @@ const defaults: WorkflowConfig = {
   },
   reviewer_model: "minimax/MiniMax-M3",
   reviewer_variant: "default",
-  review_policy: "required",
+  review_policy: "optional",
   consultation_policy: "on-demand",
   engram_url: "http://127.0.0.1:7437",
   permissions: {
